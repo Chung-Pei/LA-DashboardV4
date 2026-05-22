@@ -143,11 +143,11 @@ const BehaviorRadarTab = (() => {
     const noteHtml=_semesterFilterNote?`<div style="font-size:.76rem;color:var(--accent3,#e67e22);margin-top:3px;margin-bottom:6px">${_semesterFilterNote}</div>`:"";
     // 學期膠囊（規格書 §四-A）
     const semCapsules=_allSemesters.length?[
-      `<button class="brt-sem${_selectedSemester==="all"?" brt-semA":""}" onclick="BehaviorRadarTab.onYearChange('all')">全部</button>`,
-      ..._allSemesters.map(s=>`<button class="brt-sem${s===_selectedSemester?" brt-semA":""}" onclick="BehaviorRadarTab.onYearChange('${s}')">${_formatSemester(s)}</button>`)
+      `<button class="brt-sem${_selectedSemester==="all"?" brt-semA":""}" data-semester="all">全部</button>`,
+      ..._allSemesters.map(s=>`<button class="brt-sem${s===_selectedSemester?" brt-semA":""}" data-semester="${s}">${_formatSemester(s)}</button>`)
     ].join(""):"";
-    const clBtns=Object.entries(CLUSTER_NAMES).map(([k,n])=>`<button class="brt-cl${k===_selectedCluster?" brt-clA":""}" style="--cc:${CLUSTER_COLORS[k].border};--cb:${CLUSTER_COLORS[k].bg}" onclick="BehaviorRadarTab.selectCluster('${k}')"><span class="brt-code">${k}</span> ${n}</button>`).join("");
-    const pfBtns=[{key:"all",lbl:"全體"},{key:"pass",lbl:"✅ 及格"},{key:"fail",lbl:"❌ 不及格"}].map(({key,lbl})=>`<button class="brt-pf${key===_passFilter?" brt-pfA":""}" onclick="BehaviorRadarTab.selectPassFilter('${key}')">${lbl}</button>`).join("");
+    const clBtns=Object.entries(CLUSTER_NAMES).map(([k,n])=>`<button class="brt-cl${k===_selectedCluster?" brt-clA":""}" style="--cc:${CLUSTER_COLORS[k].border};--cb:${CLUSTER_COLORS[k].bg}" data-cluster="${k}"><span class="brt-code">${k}</span> ${n}</button>`).join("");
+    const pfBtns=[{key:"all",lbl:"全體"},{key:"pass",lbl:"✅ 及格"},{key:"fail",lbl:"❌ 不及格"}].map(({key,lbl})=>`<button class="brt-pf${key===_passFilter?" brt-pfA":""}" data-pass-filter="${key}">${lbl}</button>`).join("");
     // 防止 <style> 重複注入
     const styleId = `brt-style-${containerId}`;
     if (!document.getElementById(styleId)) {
@@ -171,6 +171,19 @@ const BehaviorRadarTab = (() => {
       <div class="brt-row"><span class="brt-lbl">依分群</span>${clBtns}</div>
       <div class="brt-row"><span class="brt-lbl">及格狀況</span>${pfBtns}</div>
     </div>`;
+    _bindControlEvents(el);
+  }
+
+  function _bindControlEvents(el){
+    el.querySelectorAll("[data-semester]").forEach(btn=>{
+      btn.addEventListener("click",()=>onYearChange(btn.dataset.semester));
+    });
+    el.querySelectorAll("[data-cluster]").forEach(btn=>{
+      btn.addEventListener("click",()=>selectCluster(btn.dataset.cluster));
+    });
+    el.querySelectorAll("[data-pass-filter]").forEach(btn=>{
+      btn.addEventListener("click",()=>selectPassFilter(btn.dataset.passFilter));
+    });
   }
 
   function onYearChange(semester){
@@ -378,7 +391,7 @@ const BehaviorRadarTab = (() => {
       const isSelected=_selectedCluster===key;
       const borderStyle=isSelected?`2px solid ${col.border}`:`1px solid rgba(110,130,165,.22)`;
       const bgStyle=isSelected?col.bg:`var(--surface,#13161f)`;
-      return`<div class="behavior-cluster-card" style="flex:0 0 ${cardW2};min-width:${cardW2};border:${borderStyle};border-radius:8px;background:${bgStyle};padding:${pad};box-shadow:0 2px 8px rgba(20,35,60,.06);cursor:pointer" onclick="BehaviorRadarTab.selectCluster('${key}')">
+      return`<div class="behavior-cluster-card" data-cluster-card="${key}" style="flex:0 0 ${cardW2};min-width:${cardW2};border:${borderStyle};border-radius:8px;background:${bgStyle};padding:${pad};box-shadow:0 2px 8px rgba(20,35,60,.06);cursor:pointer">
         <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px">
           <span style="font-weight:700;color:${col.border};font-size:${keySz}">${key}</span>
           <span style="font-weight:700;color:${col.border};font-size:${numSz};line-height:1">${n}</span>
@@ -389,6 +402,9 @@ const BehaviorRadarTab = (() => {
     }).join("");
 
     el.innerHTML=`<div style="display:flex;flex-direction:row;gap:${isMobile?'6px':'10px'};align-items:stretch;overflow-x:auto;padding:4px 2px 8px">${totalCard}${cards}</div>`;
+    el.querySelectorAll("[data-cluster-card]").forEach(card=>{
+      card.addEventListener("click",()=>selectCluster(card.dataset.clusterCard));
+    });
   }
 
   function switchView(){
@@ -507,7 +523,7 @@ const BehaviorRadarTab = (() => {
     // ── 匯出按鈕 ─────────────────────────────────────────
     const exportHTML=`
       <div style="margin-top:4px">
-        <button onclick="BehaviorRadarTab.exportClusterCSV()" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;border:1.5px solid ${clColor};background:transparent;color:${clColor};font-size:.78rem;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s" onmouseover="this.style.background='${CLUSTER_COLORS[_selectedCluster]?.bg||'rgba(79,142,247,.15)'}';" onmouseout="this.style.background='transparent'">
+        <button data-export-cluster-csv="1" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;border:1.5px solid ${clColor};background:transparent;color:${clColor};font-size:.78rem;font-weight:600;cursor:pointer;font-family:inherit;transition:background .15s">
           ⬇ 匯出 ${_selectedCluster} 學生名單（CSV）
         </button>
         <span style="font-size:.72rem;color:var(--text-dim,#888);margin-left:8px">共 ${row.count} 人</span>
@@ -527,6 +543,13 @@ const BehaviorRadarTab = (() => {
         ${recHTML}
         ${exportHTML}
       </div>`;
+    const exportBtn=panel.querySelector("[data-export-cluster-csv]");
+    if(exportBtn){
+      const hoverBg=CLUSTER_COLORS[_selectedCluster]?.bg||"rgba(79,142,247,.15)";
+      exportBtn.addEventListener("click",exportClusterCSV);
+      exportBtn.addEventListener("mouseenter",()=>{exportBtn.style.background=hoverBg;});
+      exportBtn.addEventListener("mouseleave",()=>{exportBtn.style.background="transparent";});
+    }
   }
 
   function exportClusterCSV(){

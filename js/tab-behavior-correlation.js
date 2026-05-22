@@ -338,24 +338,21 @@ const BehaviorCorrelationTab = (() => {
       <div style="display:flex;align-items:center;gap:5px">
         <label style="font-size:.78rem;color:var(--text-dim,#888);white-space:nowrap">學期</label>
         <select id="corrSemFilter"
-                style="font-size:.8rem;padding:3px 7px;border-radius:7px;border:1px solid var(--border,#2a2f45);background:var(--surface2,#1c2030);color:var(--text-mid,#9aa0b8);cursor:pointer"
-                onchange="BehaviorCorrelationTab.onFilterChange()">
+                style="font-size:.8rem;padding:3px 7px;border-radius:7px;border:1px solid var(--border,#2a2f45);background:var(--surface2,#1c2030);color:var(--text-mid,#9aa0b8);cursor:pointer">
           ${semOptions}
         </select>
       </div>
       <div style="display:flex;align-items:center;gap:5px">
         <label style="font-size:.78rem;color:var(--text-dim,#888);white-space:nowrap">分群</label>
         <select id="corrClusterFilter"
-                style="font-size:.8rem;padding:3px 7px;border-radius:7px;border:1px solid var(--border,#2a2f45);background:var(--surface2,#1c2030);color:var(--text-mid,#9aa0b8);cursor:pointer"
-                onchange="BehaviorCorrelationTab.onFilterChange()">
+                style="font-size:.8rem;padding:3px 7px;border-radius:7px;border:1px solid var(--border,#2a2f45);background:var(--surface2,#1c2030);color:var(--text-mid,#9aa0b8);cursor:pointer">
           ${clusterOptions}
         </select>
       </div>
       <div style="display:flex;align-items:center;gap:5px">
         <label style="font-size:.78rem;color:var(--text-dim,#888);white-space:nowrap">及格狀況</label>
         <select id="corrPassFilter"
-                style="font-size:.8rem;padding:3px 7px;border-radius:7px;border:1px solid var(--border,#2a2f45);background:var(--surface2,#1c2030);color:var(--text-mid,#9aa0b8);cursor:pointer"
-                onchange="BehaviorCorrelationTab.onFilterChange()">
+                style="font-size:.8rem;padding:3px 7px;border-radius:7px;border:1px solid var(--border,#2a2f45);background:var(--surface2,#1c2030);color:var(--text-mid,#9aa0b8);cursor:pointer">
           ${passOptions}
         </select>
       </div>
@@ -363,7 +360,6 @@ const BehaviorCorrelationTab = (() => {
       <div style="display:flex;align-items:center;gap:5px">
         <label style="font-size:.78rem;color:var(--text-dim,#888);white-space:nowrap;cursor:pointer" for="corrOutlierToggle">
           <input type="checkbox" id="corrOutlierToggle"
-                 onchange="BehaviorCorrelationTab.onFilterChange()"
                  style="margin-right:4px;cursor:pointer">
           排除異常值
         </label>
@@ -371,12 +367,23 @@ const BehaviorCorrelationTab = (() => {
       <span id="corrFilterCount" style="font-size:.76rem;color:var(--text-dim,#888)"></span>
       <span style="margin-left:auto;display:inline-flex;align-items:center;gap:5px">
         <span style="font-size:.76rem;color:var(--text-dim,#888)">方法</span>
-        <button id="btnCorrPearson"  onclick="BehaviorCorrelationTab.setCorrType('pearson')">Pearson <i>r</i></button>
-        <button id="btnCorrSpearman" onclick="BehaviorCorrelationTab.setCorrType('spearman')">Spearman <i>ρ</i></button>
+        <button id="btnCorrPearson" data-corr-type="pearson">Pearson <i>r</i></button>
+        <button id="btnCorrSpearman" data-corr-type="spearman">Spearman <i>ρ</i></button>
       </span>`;
 
     anchor.parentNode.insertBefore(bar, anchor);
+    _bindFilterBar(bar);
     _updateCorrTypeButtons();
+  }
+
+  function _bindFilterBar(bar) {
+    ["corrSemFilter", "corrClusterFilter", "corrPassFilter", "corrOutlierToggle"].forEach(id => {
+      const el = bar.querySelector(`#${id}`);
+      if (el) el.addEventListener("change", onFilterChange);
+    });
+    bar.querySelectorAll("[data-corr-type]").forEach(btn => {
+      btn.addEventListener("click", () => setCorrType(btn.dataset.corrType));
+    });
   }
 
   function _updateCorrTypeButtons() {
@@ -727,7 +734,7 @@ const BehaviorCorrelationTab = (() => {
         }
 
         return `<td class="text-center small" style="background:${bg};color:${textColor};cursor:pointer"
-                    onclick="BehaviorCorrelationTab.showScatter('${feat}','${g}')"
+                    data-corr-feat="${feat}" data-corr-target="${g}"
                     title="${FEAT_LABELS[feat] || feat} vs ${GRADE_LABELS[g] || g}: ${corrSym}=${r >= 0 ? "+" : ""}${r.toFixed(3)}${tipExtra}">
                   ${corrSym}${r >= 0 ? "+" : ""}${r.toFixed(2)}${sig ? `<sup style="font-size:.65em;opacity:.9">${sig}</sup>` : ""}
                 </td>`;
@@ -765,6 +772,9 @@ const BehaviorCorrelationTab = (() => {
         <span style="background:${_rToColor(0)};color:var(--text,#dde3f5);padding:1px 6px;border-radius:3px;margin-left:4px">無相關</span>
         ${filteredNote}
       </p>`;
+    el.querySelectorAll("[data-corr-feat][data-corr-target]").forEach(cell => {
+      cell.addEventListener("click", () => showScatter(cell.dataset.corrFeat, cell.dataset.corrTarget));
+    });
   }
 
   /** r → rgba 顏色（正：藍，負：紅，0：白） */
