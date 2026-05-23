@@ -39,8 +39,7 @@ const BehaviorRadarTab = (() => {
   const INSIGHT_THRESHOLD = 0.05;   // 差距 ≥ 5% 才列入洞察
   const MIN_PASS_COUNT    = 10;     // 及格樣本數低於此值時 fallback 至全體基準
 
-  // DIM_NAMES_ZH 已合併至 DIM_LABELS，直接複用
-  const DIM_NAMES_ZH = DIM_LABELS;
+  // (DIM_NAMES_ZH 已移除，_renderInsights 直接使用 DIM_LABELS)
 
   // 各維度缺乏時的行動建議（弱點→建議文字）
   const RECOMMENDATION_MAP = {
@@ -52,9 +51,11 @@ const BehaviorRadarTab = (() => {
     QUZ: { action:"建議教師針對本群發送推播，提醒增加題庫演練時間，強化輸出練習。", icon:"📋" },
   };
 
-  let _radarChart=null,_radarData=null,_behaviorMeta={};
+  let _radarData=null,_behaviorMeta={};
   let _behaviorStudents=[],_allStudents=[],_allSemesters=[];
   let _selectedSemester="all",_selectedCluster="P0",_passFilter="all",_semesterFilterNote=null;
+  // Badge 固定值：載入後快照，不隨篩選變動
+  let _badgeSemText=null,_badgeTotal=null,_badgeUpdateTime=null;
 
   // WARN-1：分群計算結果快取（key: `${cluster}|${passFilter}|${semester}` → result）
   const _computeCache = new Map();
@@ -95,7 +96,8 @@ const BehaviorRadarTab = (() => {
   function _semesterText(meta={}){
     if(meta.semester_range_label)return meta.semester_range_label;
     if(meta.semester_range)return meta.semester_range;
-    const sems=(meta.semesters||[]).filter(Boolean);
+    // N3: 排序後取首尾，防止 meta.semesters 非升序時顯示錯誤範圍
+    const sems=(meta.semesters||[]).filter(Boolean).slice().sort((a,b)=>String(a).localeCompare(String(b)));
     if(sems.length){const l=sems.map(_formatSemester);return l[0]===l[l.length-1]?l[0]:`${l[0]}-${l[l.length-1]}`;}
     return _formatSemester(meta.semester)||"未標示";
   }
@@ -107,11 +109,16 @@ const BehaviorRadarTab = (() => {
   }
 
   function _renderBehaviorMetaStrip(){
-    const meta=_mergedMeta(),total=_clusterTotal();
-    const semText=_selectedSemester&&_selectedSemester!=="all"?_formatSemester(_selectedSemester):_semesterText(meta);
-    const updateTime=_formatDateTime(meta.generated_at);
+    const meta=_mergedMeta();
+    // 初次載入時快照固定值（只快照一次，_badgeTotal 允許為 0）
+    if(_badgeSemText===null){
+      _badgeSemText=_semesterText(meta);
+      _badgeTotal=_clusterTotal();
+      _badgeUpdateTime=_formatDateTime(meta.generated_at);
+    }
     const badge=document.getElementById("behaviorRangeBadge");
-    if(badge&&total){badge.style.display="inline-flex";badge.title=`行為資料更新：${updateTime}`;badge.textContent=`行為 ${semText} · ${total.toLocaleString()}人`;}
+    // R2 fix: 使用 _badgeTotal != null 而非 truthy，避免 0 人時永遠隱藏
+    if(badge&&_badgeTotal!=null){badge.style.display="inline-flex";badge.title=`行為資料更新：${_badgeUpdateTime}`;badge.textContent=`行為 ${_badgeSemText} · ${_badgeTotal.toLocaleString()}人`;}
     const strip=document.getElementById("behaviorMetaStrip");
     if(strip)strip.style.display="none";
   }
@@ -124,6 +131,7 @@ const BehaviorRadarTab = (() => {
       _behaviorStudents=_enrichBehaviorStudents(behaviorData?.students||[]);_allStudents=_behaviorStudents;
       _allSemesters=Array.isArray(_behaviorMeta.semesters)&&_behaviorMeta.semesters.length?[..._behaviorMeta.semesters]:[];
       _selectedSemester="all";_selectedCluster="P0";_passFilter="all";_semesterFilterNote=null;
+      _badgeSemText=null;_badgeTotal=null;_badgeUpdateTime=null; // B2 fix: 重載時強制重新快照
       _invalidateComputeCache();  // WARN-1：資料重載時清除快取
       _renderBehaviorMetaStrip();
       _renderControls(controlsId);
@@ -136,10 +144,7 @@ const BehaviorRadarTab = (() => {
 
   function _renderControls(containerId){
     const el=document.getElementById(containerId);if(!el)return;
-    const semOpts=[
-      `<option value="all">全部年度（${_behaviorMeta.semester_range_label||_behaviorMeta.semester_range||"—"}）</option>`,
-      ..._allSemesters.map(s=>`<option value="${s}"${s===_selectedSemester?" selected":""}>${_formatSemester(s)}</option>`),
-    ].join("");
+    // B3 fix: semOpts was dead code (built but never inserted into HTML); removed
     const noteHtml=_semesterFilterNote?`<div style="font-size:.76rem;color:var(--accent3,#e67e22);margin-top:3px;margin-bottom:6px">${_semesterFilterNote}</div>`:"";
     // 學期膠囊（規格書 §四-A）
     const semCapsules=_allSemesters.length?[
@@ -198,7 +203,7 @@ const BehaviorRadarTab = (() => {
       const semData=base?.by_semester?.[semester];
       if(semData){
         _radarData={...base,_base:base,clusters:semData.clusters,pass_vs_fail:semData.pass_vs_fail,meta:{...(base.meta||{}),student_count:semData.student_count}};
-        const bySem=_allStudents.filter(s=>String(s.semester||"").replace(/-/g,"")==String(semester).replace(/-/g,""));
+        const bySem=_allStudents.filter(s=>String(s.semester||"").replace(/-/g,"")=== String(semester).replace(/-/g,""));
         _behaviorStudents=bySem.length>0?bySem:_allStudents;
         _semesterFilterNote=null;
       }else{
@@ -208,7 +213,8 @@ const BehaviorRadarTab = (() => {
         _semesterFilterNote=`⚠ ${_formatSemester(semester)} 無分年資料，目前顯示跨年總量（請重跑 ETL）`;
       }
     }
-    _renderBehaviorMetaStrip();_passFilter="all";
+    // R3 fix: badge 已在 init() 快照固定，無需每次學期切換後重呼叫
+    _passFilter="all";
     _renderControls("radarControls");
     renderClusterSummary("clusterSummaryCards");
     _renderRadar("radarChart");
@@ -319,9 +325,8 @@ const BehaviorRadarTab = (() => {
   function _renderChart(canvasId,labels,datasets){
     const canvas=document.getElementById(canvasId);if(!canvas)return;
     canvas.style.display="";canvas.parentElement?.querySelector(".behavior-empty-message")?.remove();
-    // BUG-1 修正：透過 ChartRegistry 統一管理，防止例外洩漏
+    // N1: _radarChart 模組變數已移除（ChartRegistry 為唯一追蹤機制）
     ChartRegistry.destroyById(canvasId);
-    _radarChart=null;
     const _gridColor=_isDark()?'rgba(180,185,210,0.20)':'rgba(0,0,0,0.08)';
     const _angleColor=_isDark()?'rgba(180,185,210,0.30)':'rgba(0,0,0,0.15)';
     const _labelColor=_isDark()?'rgba(190,195,220,0.85)':'rgba(60,65,90,0.85)';
@@ -334,8 +339,7 @@ const BehaviorRadarTab = (() => {
     const _layoutPad=_isMobile?{top:4,right:8,bottom:4,left:8}:6;
     const _pointLblFontSz=_isMobile?10:12;
     const _tickFontSz=_isMobile?9:10;
-    _radarChart=new Chart(canvas.getContext("2d"),{type:"radar",data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,layout:{padding:_layoutPad},scales:{r:{min:0,max:1,grid:{color:_gridColor},angleLines:{color:_angleColor},pointLabels:{color:_labelColor,font:{size:_pointLblFontSz}},ticks:{stepSize:0.2,color:_tickColor,backdropColor:'transparent',callback:v=>`${Math.round(v*100)}%`,font:{size:_tickFontSz}}}},plugins:{legend:{position:"bottom",align:"center",labels:{boxWidth:_legendBox,boxHeight:_isMobile?10:12,font:{size:_legendFontSz,weight:"600"},padding:_legendPad}},tooltip:{mode:"nearest",intersect:true,callbacks:{title:ctx=>ctx.length?`📊 ${ctx[0].label}`:"",label:ctx=>` ${ctx.dataset.label.split("（")[0]}：${(ctx.raw*100).toFixed(1)}%`,afterBody:ctx=>{if(!ctx.length)return[];const sorted=[...ctx].sort((a,b)=>b.raw-a.raw),dl=ctx[0].label;return[`🏆 ${dl} 排名：`,...sorted.map((c,i)=>`  ${RANK_MEDALS[i]??`${i+1}.`} ${c.dataset.label.split("（")[0]}：${(c.raw*100).toFixed(1)}%`)];},footer:ctx=>{if(!ctx.length)return[];const l=["👥 人數："];ctx.forEach(c=>{const m=c.dataset.label.match(/n=(\d+)/);if(m)l.push(`  ${c.dataset.label.split("（")[0]}：${m[1]} 人`);});return l;}}}}}});
-    ChartRegistry.register(canvasId, _radarChart);  // BUG-1：登記至 Registry
+    ChartRegistry.register(canvasId, new Chart(canvas.getContext("2d"),{type:"radar",data:{labels,datasets},options:{responsive:true,maintainAspectRatio:false,layout:{padding:_layoutPad},scales:{r:{min:0,max:1,grid:{color:_gridColor},angleLines:{color:_angleColor},pointLabels:{color:_labelColor,font:{size:_pointLblFontSz}},ticks:{stepSize:0.2,color:_tickColor,backdropColor:'transparent',callback:v=>`${Math.round(v*100)}%`,font:{size:_tickFontSz}}}},plugins:{legend:{position:"bottom",align:"center",labels:{boxWidth:_legendBox,boxHeight:_isMobile?10:12,font:{size:_legendFontSz,weight:"600"},padding:_legendPad}},tooltip:{mode:"nearest",intersect:true,callbacks:{title:ctx=>ctx.length?`📊 ${ctx[0].label}`:"",label:ctx=>` ${ctx.dataset.label.split("（")[0]}：${(ctx.raw*100).toFixed(1)}%`,afterBody:ctx=>{if(!ctx.length)return[];const sorted=[...ctx].sort((a,b)=>b.raw-a.raw),dl=ctx[0].label;return[`🏆 ${dl} 排名：`,...sorted.map((c,i)=>`  ${RANK_MEDALS[i]??`${i+1}.`} ${c.dataset.label.split("（")[0]}：${(c.raw*100).toFixed(1)}%`)];},footer:ctx=>{if(!ctx.length)return[];const l=["👥 人數："];ctx.forEach(c=>{const m=c.dataset.label.match(/n=(\d+)/);if(m)l.push(`  ${c.dataset.label.split("（")[0]}：${m[1]} 人`);});return l;}}}}}}));
   }
 
   // 依目前篩選狀態計算某群人數（模組層級，避免每次 render 重建）
@@ -439,7 +443,7 @@ const BehaviorRadarTab = (() => {
     // 計算各維度差距
     const diffs=dims.map((d,i)=>({
       dim:d,
-      label:DIM_NAMES_ZH[d]||d,
+      label:DIM_LABELS[d]||d,
       clVal:row.values[i],
       benchVal:bench.values[i],
       diff:row.values[i]-bench.values[i],
@@ -558,7 +562,7 @@ const BehaviorRadarTab = (() => {
     const filtered=students.filter(s=>_selectedCluster==="P0"||s.cluster===_selectedCluster);
     if(!filtered.length){alert("目前篩選條件下無學生資料");return;}
     const dims=_dimensions();
-    const header=["masked_id","cluster","semester","final_score",...dims.map(d=>d.toLowerCase()+"_rate")].join(",");
+    const header=["masked_id","cluster","semester","final_score",...dims.map(d=>(DIM_FEATURE_MAP[d]||d.toLowerCase()+"_completion_rate"))].join(",");
     const rows=filtered.map(s=>{
       const feats=s.features||{};
       const dimVals=dims.map(d=>{const fk=DIM_FEATURE_MAP[d]||d.toLowerCase()+"_completion_rate";return(Number(feats[fk]??feats[d]??0)*100).toFixed(1)+"%";});
@@ -583,10 +587,11 @@ const BehaviorRadarTab = (() => {
 
   function resetFilters(){
     _selectedSemester="all";_selectedCluster="P0";_passFilter="all";_semesterFilterNote=null;
-    _renderBehaviorMetaStrip();
-    _renderControls("radarControls");renderClusterSummary("clusterSummaryCards");_renderRadar("radarChart");
-    _renderInsights();
-    const ins=document.getElementById("radarInsightsPanel");if(ins)ins.style.display="none";
+    // B1 fix: badge 快照反映「載入的資料範圍」，與篩選狀態無關，不應在 resetFilters 清除
+    _renderControls("radarControls");
+    renderClusterSummary("clusterSummaryCards");
+    _renderRadar("radarChart");
+    _renderInsights(); // R4: _renderInsights() 在 P0 時自行隱藏 panel
   }
   return{init,switchView,toggleCluster,renderClusterSummary,onYearChange,selectCluster,selectPassFilter,exportClusterCSV,resetFilters};
 })();

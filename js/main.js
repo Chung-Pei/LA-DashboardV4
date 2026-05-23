@@ -1048,6 +1048,12 @@ function init() {
     attachInfoButtons();
     attachChartExpandButtons();
   });
+  // 背景預載行為資料，不阻塞主流程；切換至學習行為分頁時直接使用快取
+  setTimeout(() => {
+    if (typeof BehaviorTabManager !== 'undefined') {
+      BehaviorTabManager.lazyInit(); // lazyInit 內部已有完整 try/catch，無需外層 catch
+    }
+  }, 0);
 }
 
 // ══════════════════════════════════════════════════════════
