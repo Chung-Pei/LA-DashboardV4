@@ -1,10 +1,11 @@
 // ══════════════════════════════════════════════════════════
 // sw.js — 學習數據分析儀表板 Service Worker
 // 策略：App Shell (Cache First) + data/*.json (Network First)
+// 更新：2026-05-23 同步 index.html 新增模組與 icon
 // ══════════════════════════════════════════════════════════
 
-const CACHE_VERSION = 'la-dash-v5-20260518a';
-const DATA_CACHE    = 'la-dash-data-v5-20260518a';
+const CACHE_VERSION = 'la-dash-v6-20260523a';
+const DATA_CACHE    = 'la-dash-data-v6-20260523a';
 
 // App Shell：靜態資源，安裝時全部快取
 // ⚠ CDN 資源釘定版本號，確保快取與 HTML 引用一致
@@ -13,17 +14,30 @@ const CHARTJS_URL = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.
 const APP_SHELL = [
   './index.html',
   './manifest.json',
+  // Icons（含新增 167/120）
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-180.png',
+  './icons/icon-167.png',
+  './icons/icon-120.png',
   // Vendor (本地化)
   './js/vendor/chart.umd.min.js',
   './js/vendor/chartjs-plugin-annotation.min.js',
   './js/vendor/pwacompat.min.js',
-  // App JS 模組
+  // 安全模組（同步載入，無版本參數）
+  './js/frame-guard.js',
+  // 篩選引擎（無版本參數）
+  './js/filter-engine.js',
+  // 主應用邏輯
   './js/main.js',
-  './js/behavior-init.js',
-  './js/at-risk-report.js',
+  // 學習行為模組（版本釘定 ?v=20260521）
+  './js/chart-registry.js?v=20260521',
+  './js/behavior-loader.js?v=20260521',
+  './js/tab-behavior-radar.js?v=20260521',
+  './js/tab-behavior-correlation.js?v=20260521',
+  './js/tab-behavior-time.js?v=20260521',
+  './js/behavior-init.js?v=20260521',
+  './js/at-risk-report.js?v=20260521',
   // CDN 備援（版本釘定）
   CHARTJS_URL,
 ];
@@ -93,7 +107,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // JS 優先取新版，避免分頁模組更新後仍被舊快取卡住
+  // frame-guard.js 同步載入 → Network First（安全關鍵，優先取新版）
+  if (url.pathname.endsWith('frame-guard.js')) {
+    event.respondWith(networkFirst(request));
+    return;
+  }
+
+  // JS（含帶 ?v= 版本參數的模組）→ Network First，避免更新後被舊快取卡住
   if (url.pathname.endsWith('.js')) {
     event.respondWith(networkFirst(request));
     return;
