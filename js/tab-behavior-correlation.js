@@ -508,14 +508,6 @@ const BehaviorCorrelationTab = (() => {
     const anchor = document.getElementById(afterId);
     if (!anchor) return;
 
-    // BUG-6 修正：若外框已存在，僅更新 tbody，避免整個 DOM 重建造成 Layout Reflow
-    const existing = document.getElementById("corrLaggedSection");
-    if (existing) {
-      const tbody = existing.querySelector("tbody");
-      if (tbody) { tbody.innerHTML = tableRows; return; }
-      existing.remove();  // 結構不符時才重建
-    }
-
     const lagged = _corrData?.lagged_pearson;
     if (!lagged?.results || !Object.keys(lagged.results).length) return;
 
@@ -536,21 +528,6 @@ const BehaviorCorrelationTab = (() => {
     const activeRows = (!isUnfiltered && Array.isArray(filteredRows) && filteredRows.length > 0)
       ? filteredRows
       : null;
-
-    function _getLagR(feat, target) {
-      if (activeRows) {
-        // 篩選子集即時重算
-        return (_corrType === "spearman")
-          ? _spearmanValue(activeRows, feat, target)
-          : _pearsonValue(activeRows, feat, target);
-      }
-      // 全量：用 ETL 預算值
-      return results[feat]?.[target === front_target ? "front" : "back"]?.r ?? null;
-    }
-
-    const nSuffix = activeRows
-      ? ` <span style="opacity:.6;font-size:.75em">n=${activeRows.length}</span>`
-      : "";
 
     // 重建 rows：篩選模式下動態計算 front r / back r / lag_delta
     const rows = Object.entries(results)
@@ -578,7 +555,6 @@ const BehaviorCorrelationTab = (() => {
       const r   = stat.r;
       const bg  = _rToColor(r);
       const tc  = Math.abs(r) > 0.45 ? "#fff" : "var(--text,#dde3f5)";
-      // 篩選模式下 p-value 無法可靠估算，顯示 n= 取代；全量模式顯示 sig 星號
       const sig = (!activeRows && stat.significant) ? "*" : "";
       const tipDetail = activeRows
         ? `n=${activeRows.length}`
@@ -605,11 +581,19 @@ const BehaviorCorrelationTab = (() => {
 
     const tableRows = rows.map(([feat, v]) => `
       <tr>
-        <td class="small text-nowrap pe-2">${FEAT_LABELS[feat] || feat}</td>
+        <td class="small text-nowrap pe-2">${escapeHtml(FEAT_LABELS[feat] || feat)}</td>
         ${_rCell(v.front)}
         ${_rCell(v.back)}
         ${_deltaCell(v.lag_delta)}
       </tr>`).join("");
+
+    // 若外框已存在，僅更新 tbody，避免整個 DOM 重建造成 Layout Reflow
+    const existing = document.getElementById("corrLaggedSection");
+    if (existing) {
+      const tbody = existing.querySelector("tbody");
+      if (tbody) { tbody.innerHTML = tableRows; return; }
+      existing.remove();
+    }
 
     const section = document.createElement("div");
     section.id = "corrLaggedSection";
@@ -709,7 +693,7 @@ const BehaviorCorrelationTab = (() => {
 
     const gradeHeaderCells = grades.map(g =>
       `<th class="text-center small fw-normal" style="min-width:90px">
-        ${GRADE_LABELS[g] || g}
+        ${escapeHtml(GRADE_LABELS[g] || g)}
       </th>`
     ).join("");
 
@@ -734,13 +718,13 @@ const BehaviorCorrelationTab = (() => {
         }
 
         return `<td class="text-center small" style="background:${bg};color:${textColor};cursor:pointer"
-                    data-corr-feat="${feat}" data-corr-target="${g}"
-                    title="${FEAT_LABELS[feat] || feat} vs ${GRADE_LABELS[g] || g}: ${corrSym}=${r >= 0 ? "+" : ""}${r.toFixed(3)}${tipExtra}">
+                    data-corr-feat="${escapeHtml(feat)}" data-corr-target="${escapeHtml(g)}"
+                    title="${escapeHtml(FEAT_LABELS[feat] || feat)} vs ${escapeHtml(GRADE_LABELS[g] || g)}: ${corrSym}=${r >= 0 ? "+" : ""}${r.toFixed(3)}${tipExtra}">
                   ${corrSym}${r >= 0 ? "+" : ""}${r.toFixed(2)}${sig ? `<sup style="font-size:.65em;opacity:.9">${sig}</sup>` : ""}
                 </td>`;
       }).join("");
       return `<tr>
-        <td class="small text-nowrap pe-2">${FEAT_LABELS[feat] || feat}</td>
+        <td class="small text-nowrap pe-2">${escapeHtml(FEAT_LABELS[feat] || feat)}</td>
         ${cells}
       </tr>`;
     }).join("");

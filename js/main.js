@@ -1085,7 +1085,7 @@ function populateFilters() {
 
   const aSem = document.getElementById('aFilterSem');
   aSem.innerHTML = `<option value="all">全學期 All</option>` +
-    semsDesc.map(s => `<option value="${s}">${semLabel(s)}</option>`).join('');
+    semsDesc.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(semLabel(s))}</option>`).join('');
 
   _applyProgramDisabledState('all');
   _applyTypeLockedState('all');
@@ -1191,7 +1191,7 @@ function updateCompareFilter(sem, sheet, type = 'all', includeRetaker = true) {
   const prev = el.value || 'auto';
   el.innerHTML = [
     `<option value="auto">自動：上一個有資料</option>`,
-    ...candidates.map(s => `<option value="${s}">${semLabel(s)}</option>`)
+    ...candidates.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(semLabel(s))}</option>`)
   ].join('');
   if (prev !== 'auto' && candidates.includes(prev)) el.value = prev;
   else el.value = 'auto';
@@ -1824,7 +1824,7 @@ function populateCFilterSem() {
   if (!sel || !DATA) return;
   const sems = [...DATA.meta.semesters].sort((a,b) => Number(b)-Number(a));
   sel.innerHTML = '<option value="all">全部學期 All</option>' +
-    sems.map(s => `<option value="${s}">${semLabel(s)}</option>`).join('');
+    sems.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(semLabel(s))}</option>`).join('');
 }
 
 function populateCYearFilter() {
@@ -2233,7 +2233,7 @@ function renderProfile(sid) {
       <div class="tl-item">
         <div class="tl-dot ${escapeHtml(r.type)}"></div>
         <div class="tl-header">
-          <span class="tl-sem">${semLabel(r.semester)}</span>
+          <span class="tl-sem">${escapeHtml(semLabel(r.semester))}</span>
           <span class="tl-sheet">${escapeHtml(r.sheet_name)}</span>
           <span class="tl-type-badge tl-type-${escapeHtml(r.type)}">${typeLabel}</span>
           ${r.is_retaker && r.delta != null
@@ -2698,11 +2698,11 @@ function renderHeatmap(filtered) {
   let svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" style="display:block">`;
   svg+=`<rect width="${W}" height="${H}" fill="${bgCol}" rx="8"/>`;
   sems.forEach((s,i)=>{
-    svg+=`<text x="${labelW+i*cellW+cellW/2}" y="${headerH-8}" text-anchor="middle" fill="${dimCol}" font-size="9" font-family="monospace">${semLabel(s)}</text>`;
+    svg+=`<text x="${labelW+i*cellW+cellW/2}" y="${headerH-8}" text-anchor="middle" fill="${dimCol}" font-size="9" font-family="monospace">${safeSvgAttr(semLabel(s))}</text>`;
   });
   classes.forEach((cls,ri)=>{
     const y=headerH+ri*cellH;
-    svg+=`<text x="${labelW-6}" y="${y+cellH/2+4}" text-anchor="end" fill="${textCol}" font-size="10" font-family="sans-serif">${cls}</text>`;
+    svg+=`<text x="${labelW-6}" y="${y+cellH/2+4}" text-anchor="end" fill="${textCol}" font-size="10" font-family="sans-serif">${safeSvgAttr(cls)}</text>`;
     sems.forEach((sem,ci)=>{
       const rec=cellMap.get(`${sem}__${cls}`);
       const v=rec?.avg_semester;
@@ -3120,7 +3120,7 @@ function _buildPanelSummary(panel) {
   if (panel === 'A' || panel === 'D') {
     const semEl  = panel === 'A' ? document.getElementById('aFilterSem') : null;
     const progEl = document.getElementById(panel === 'A' ? 'aFilterProgram' : 'dFilterProgram');
-    const typeEl = document.getElementById(panel === 'A' ? 'aFilterType' : null);
+    const typeEl = panel === 'A' ? document.getElementById('aFilterType') : null;
     if (semEl?.value  && semEl.value  !== 'all') parts.push(semLabel(semEl.value));
     if (progEl?.value && progEl.value !== 'all') parts.push(PROGRAM_LABELS[progEl.value] || progEl.value);
     if (typeEl?.value && typeEl.value !== 'all') parts.push(typeEl.value === 'theory' ? '正課' : '實驗課');
@@ -3167,7 +3167,7 @@ function initDSemFilter() {
             style="padding:3px 10px;border-radius:14px;border:1px solid var(--border2);
                    background:var(--surface2);color:var(--text-dim);font-size:10px;
                    font-family:'JetBrains Mono',monospace;cursor:pointer;transition:all 0.15s">
-      ${semLabel(s)}
+      ${escapeHtml(semLabel(s))}
     </button>`).join('');
 
   _updateDSemRangeLabel();
@@ -3336,7 +3336,7 @@ function renderD() {
     ' — ' + metricLabel(dMetric) + ' 跨學期趨勢';
 
   if (dView === 'merge') {
-    renderDTrendMerge(filtered, sems);
+    renderDTrendMerge(filtered, sems, allClasses);
   } else {
     renderDTrendClass(filtered, sems);
   }
@@ -3363,20 +3363,11 @@ function renderD() {
   updateFilterSummary('D');
 }
 
-function renderDTrendMerge(filtered, sems) {
+function renderDTrendMerge(filtered, sems, allClasses) {
   const filterProg = document.getElementById('dFilterProgram').value;
 
   let datasets;
   if (filterProg === 'all') {
-    const allClasses = Object.values(DATA.class_summary).map(c => ({
-      ...c,
-      program: classifyProgram(c.sheet_name, c.semester)
-    })).filter(c => {
-      if (!getIncludeRetaker('D') &&
-          (c.program === 'retake_class' || c.program === 'retake_student')) return false;
-      return dType === 'practicum' ? c.type === 'practicum' : c.type !== 'practicum';
-    });
-
     const programs = sortPrograms([...new Set(allClasses.map(c => c.program))]);
     datasets = programs.map(prog => {
       const data = sems.map(sem => {
@@ -3450,7 +3441,7 @@ function renderDTrendClass(filtered, sems) {
     document.getElementById('dModeHint').innerHTML =
       `⚠️ 各班獨立模式：班級數（${classes.length}）超過上限（${MAX_LINES}），` +
       `已自動切換為 <strong style="color:var(--accent)">合併總平均</strong>。請縮小學期範圍或指定學制。`;
-    renderDTrendMerge(filtered, sems);
+    renderDTrendMerge(filtered, sems, allClasses);
     return;
   }
 
@@ -3628,9 +3619,6 @@ function renderDPassRateBar(allClasses, sems, filterProg) {
   });
 }
 
-function renderDPassRate(allClasses, sems, filterProg) {
-  renderDPassRateLine(allClasses, sems, filterProg);
-}
 
 function renderDTable(filtered) {
   const tbody = document.getElementById('dDetailBody');
@@ -3640,7 +3628,7 @@ function renderDTable(filtered) {
   );
   tbody.innerHTML = rows.map((c, i) => `
     <tr style="background:${i%2?'var(--surface2)':'var(--surface)'}">
-      <td style="padding:7px 10px;border-bottom:1px solid var(--border)">${semLabel(c.semester)}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid var(--border)">${escapeHtml(semLabel(c.semester))}</td>
       <td style="padding:7px 10px;border-bottom:1px solid var(--border);font-weight:600">${escapeHtml(c.sheet_name)}</td>
       <td style="padding:7px 10px;border-bottom:1px solid var(--border)">
         <span class="program-badge prog-${escapeHtml(c.program.replace(/_/g,'-'))}">${escapeHtml(PROGRAM_LABELS[c.program] ?? c.program)}</span>
