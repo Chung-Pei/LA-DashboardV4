@@ -330,6 +330,35 @@ select option {
   min-width: 0;
   max-width: 100%;
 }
+
+/* 建議修課人數摘要表格 */
+.enrollment-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  color: var(--text-mid);
+  margin-top: 4px;
+}
+.enrollment-summary-table thead tr {
+  border-bottom: 1px solid var(--border);
+}
+.enrollment-summary-table th {
+  font-weight: 600;
+  color: var(--text-dim);
+  padding: 4px 6px;
+  text-align: left;
+  letter-spacing: 0.03em;
+}
+.enrollment-summary-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+}
+.enrollment-summary-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.enrollment-summary-table tbody tr:hover td {
+  background: var(--surface2);
+}
 .chart-title {
   font-size: 11px;
   font-weight: 700;
@@ -1924,6 +1953,7 @@ body.light .behavior-range-badge {
       <div class="chart-wrap" style="height:240px">
         <canvas id="chartCorrelation"></canvas>
       </div>
+      <div id="enrollmentSummary" style="margin-top:12px"></div>
     </div>
   </div>
 </div>
