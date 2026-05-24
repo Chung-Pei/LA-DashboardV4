@@ -2890,9 +2890,9 @@ function renderCorrelation(filtered) {
               ];
             },
             title: ctx => {
-              // 回歸線 tooltip 標題顯示學制名稱
+              // 回歸線才顯示學制名稱；散佈點不顯示 title
               const ds = ctx[0]?.dataset;
-              if (ds?.type !== 'line') return ctx[0]?.dataset?.label ?? '';
+              if (!ds || ds.type !== 'line') return '';
               const progKey = ds._progKey;
               const opt = optData?.[progKey];
               return opt?.label ?? ds.label ?? '';
@@ -2920,7 +2920,7 @@ function _renderEnrollmentSummary(programs, optData) {
   const el = document.getElementById('enrollmentSummary');
   if (!el || !optData) return;
 
-  // 顯示順序：全體合併優先，其餘依 PROGRAM_ORDER
+  // 顯示順序：全體合併優先，其餘依 PROGRAM_ORDER（WARN-2 修正）
   const keys = ['all', ...programs].filter((k, i, arr) => arr.indexOf(k) === i);
 
   const reasonText = {
@@ -2930,10 +2930,17 @@ function _renderEnrollmentSummary(programs, optData) {
     linear:            '回歸退化為線性，無最大值',
   };
 
-  const rows = keys.map(key => {
+  // WARN-2 修正：依 PROGRAM_ORDER 排序，確保表格顯示順序一致
+  const SUMMARY_ORDER = ['all', ...PROGRAM_ORDER];
+  const sortedKeys = SUMMARY_ORDER.filter(k => keys.includes(k));
+  // 補上 PROGRAM_ORDER 未涵蓋的 key（如未來新學制）
+  keys.forEach(k => { if (!sortedKeys.includes(k)) sortedKeys.push(k); });
+
+  const rows = sortedKeys.map(key => {
     const opt = optData[key];
     if (!opt) return '';
-    const label = opt.label ?? key;
+    // BUG-1 修正：label 套 escapeHtml 防禦
+    const label = escapeHtml(opt.label ?? key);
     const color = key === 'all'
       ? 'rgba(247,164,79,0.9)'
       : (PROGRAM_COLORS[key] ?? 'var(--text-dim)');
@@ -2953,7 +2960,8 @@ function _renderEnrollmentSummary(programs, optData) {
         <td style="text-align:center">${inRange}</td>
       </tr>`;
     } else {
-      const reason = reasonText[opt.reason] ?? opt.reason ?? '–';
+      // BUG-2 修正：reason fallback 套 escapeHtml
+      const reason = reasonText[opt.reason] ?? escapeHtml(opt.reason ?? '–');
       return `<tr style="opacity:0.55">
         <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>${label}</td>
         <td colspan="4" style="color:var(--text-dim);font-style:italic">⚠ ${reason}</td>
