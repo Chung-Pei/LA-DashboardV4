@@ -2804,9 +2804,10 @@ function renderCorrelation(filtered) {
   }));
 
   const regData = DATA?.meta?.count_passrate_regression;  // schema 3.0: 巢狀結構
+  const optData = DATA?.meta?.optimal_enrollment;         // schema 3.0: 各學制建議人數
 
   // 全體合併回歸線（橘色虛線）
-  const regAll   = regData?.all;
+  const regAll    = regData?.all;
   const hasRegAll = regAll?.available === true;
   const rLabelAll = hasRegAll
     ? `全體回歸線  r=${regAll.r}  y=${regAll.slope}x${regAll.intercept >= 0 ? '+' : ''}${regAll.intercept}`
@@ -2822,6 +2823,7 @@ function renderCorrelation(filtered) {
     pointRadius: 0,
     fill:        false,
     tension:     0,
+    _progKey:    'all',   // 供 tooltip 識別
   }] : [];
 
   // 各學制回歸線（依 PROGRAM_COLORS，細實線）
@@ -2841,6 +2843,7 @@ function renderCorrelation(filtered) {
       pointRadius: 0,
       fill:        false,
       tension:     0,
+      _progKey:    prog,  // 供 tooltip 識別
     }];
   });
 
@@ -2869,10 +2872,32 @@ function renderCorrelation(filtered) {
           labels:   { color: 'var(--text,#dde3f5)', font: { size: 11 } },
         },
         tooltip: { ...CHART_DEFAULTS.plugins.tooltip,
-          callbacks: { label: ctx => {
-            if (ctx.dataset.type === 'line') return null;
-            return `${ctx.raw.cls} ${semLabel(ctx.raw.sem)}  人數:${ctx.raw.x} 及格率:${ctx.raw.y}%`;
-          }}
+          callbacks: {
+            label: ctx => {
+              // 散佈點：顯示班級資訊
+              if (ctx.dataset.type !== 'line') {
+                return `${ctx.raw.cls} ${semLabel(ctx.raw.sem)}  人數:${ctx.raw.x} 及格率:${ctx.raw.y}%`;
+              }
+              // 回歸線：顯示建議人數資訊（方案 2）
+              const progKey = ctx.dataset._progKey;
+              const opt = optData?.[progKey];
+              if (!opt?.available) return null;
+              const rangeNote = opt.in_range ? '' : `（觀測範圍外，夾緊至 ${opt.optimal_count_clamped} 人）`;
+              return [
+                `建議人數：${opt.optimal_count_clamped} 人${rangeNote}`,
+                `預期及格率：${opt.optimal_passrate}%`,
+                `觀測範圍：${opt.x_min}–${opt.x_max} 人（${opt.n} 筆）`,
+              ];
+            },
+            title: ctx => {
+              // 回歸線 tooltip 標題顯示學制名稱
+              const ds = ctx[0]?.dataset;
+              if (ds?.type !== 'line') return ctx[0]?.dataset?.label ?? '';
+              const progKey = ds._progKey;
+              const opt = optData?.[progKey];
+              return opt?.label ?? ds.label ?? '';
+            },
+          }
         },
       },
       scales: {
@@ -2881,6 +2906,75 @@ function renderCorrelation(filtered) {
       },
     },
   });
+
+  // 方案 1：圖表下方摘要表格
+  _renderEnrollmentSummary(programs, optData);
+}
+
+/**
+ * 在 #enrollmentSummary 容器渲染建議人數摘要表格。
+ * 顯示當前篩選有資料的學制 + 全體合併（all）。
+ * available=false 的學制也顯示，說明原因。
+ */
+function _renderEnrollmentSummary(programs, optData) {
+  const el = document.getElementById('enrollmentSummary');
+  if (!el || !optData) return;
+
+  // 顯示順序：全體合併優先，其餘依 PROGRAM_ORDER
+  const keys = ['all', ...programs].filter((k, i, arr) => arr.indexOf(k) === i);
+
+  const reasonText = {
+    no_maximum:        '人數分布呈 U 型，無最大值',
+    insufficient_data: '資料點不足（< 3 筆）',
+    singular_matrix:   '資料共線，無法計算',
+    linear:            '回歸退化為線性，無最大值',
+  };
+
+  const rows = keys.map(key => {
+    const opt = optData[key];
+    if (!opt) return '';
+    const label = opt.label ?? key;
+    const color = key === 'all'
+      ? 'rgba(247,164,79,0.9)'
+      : (PROGRAM_COLORS[key] ?? 'var(--text-dim)');
+
+    if (opt.available) {
+      const clamped  = opt.in_range ? '' :
+        `<span style="color:var(--text-dim);font-size:10px"> →夾緊至 ${opt.optimal_count_clamped} 人</span>`;
+      const inRange  = opt.in_range
+        ? '<span style="color:#64d4a8">✓</span>'
+        : '<span style="color:#f0c85b">⚠</span>';
+      return `<tr>
+        <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>${label}</td>
+        <td style="text-align:center">${opt.optimal_count_clamped} 人${clamped}</td>
+        <td style="text-align:center">${opt.optimal_passrate}%</td>
+        <td style="text-align:center">${opt.n} 筆</td>
+        <td style="text-align:center">${opt.x_min}–${opt.x_max}</td>
+        <td style="text-align:center">${inRange}</td>
+      </tr>`;
+    } else {
+      const reason = reasonText[opt.reason] ?? opt.reason ?? '–';
+      return `<tr style="opacity:0.55">
+        <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>${label}</td>
+        <td colspan="4" style="color:var(--text-dim);font-style:italic">⚠ ${reason}</td>
+        <td style="text-align:center">${opt.n ?? '–'} 筆</td>
+      </tr>`;
+    }
+  }).join('');
+
+  el.innerHTML = rows
+    ? `<table class="enrollment-summary-table">
+        <thead><tr>
+          <th>學制</th>
+          <th>建議人數</th>
+          <th>預期及格率</th>
+          <th>資料點</th>
+          <th>觀測範圍</th>
+          <th>在範圍內</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`
+    : '';
 }
 
 // ══════════════════════════════════════════════════════════
