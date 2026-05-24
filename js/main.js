@@ -1714,6 +1714,11 @@ function _resetCGeneralFilters() {
   if (searchEl) searchEl.value = '';
   const searchBox = document.getElementById('searchResults');
   if (searchBox) { searchBox.classList.remove('open'); searchBox.innerHTML = ''; }
+  // BUG-5 FIX: 清除學生成績輪廓區塊與搜尋提示
+  const profileWrap = document.getElementById('profileWrap');
+  if (profileWrap) { profileWrap.innerHTML = ''; profileWrap.style.marginBottom = ''; }
+  const searchHint = document.getElementById('cSearchHint');
+  if (searchHint) searchHint.style.display = '';
   ['cTypePrac'].forEach(id => {
     const btn = document.getElementById(id);
     if (btn) { btn.disabled = false; btn.style.opacity = ''; }
@@ -2270,13 +2275,14 @@ function renderProfile(sid) {
   const theory    = sorted.filter(r => r.type === 'theory');
   const practicum = sorted.filter(r => r.type === 'practicum');
 
-  // 建立共用 labels（所有學期×班別的完整時間軸，依 sorted 順序）
-  const allLabels = sorted.map(r => semLabel(r.semester) + ' ' + r.sheet_name);
+  // BUG-3 FIX: x 軸以「學期+班別」為唯一鍵，theory 與 practicum 共用同一時間軸，
+  // 避免同學期同班出現重複 label（theory 一條、practicum 一條均映射到同一 x 位置）。
+  const labelKey = r => semLabel(r.semester) + ' ' + r.sheet_name;
+  const allLabels = [...new Map(sorted.map(r => [labelKey(r), labelKey(r)])).values()];
 
   const datasets = [];
   if (theory.length > 0) {
-    // 將 theory 資料對應到全域 labels 位置，缺漏補 null
-    const theoryMap = new Map(theory.map(r => [semLabel(r.semester) + ' ' + r.sheet_name, r.semester_score]));
+    const theoryMap = new Map(theory.map(r => [labelKey(r), r.semester_score]));
     datasets.push({
       label: '正課 Theory',
       data: allLabels.map(lbl => theoryMap.has(lbl) ? theoryMap.get(lbl) : null),
@@ -2285,7 +2291,7 @@ function renderProfile(sid) {
     });
   }
   if (practicum.length > 0) {
-    const practicumMap = new Map(practicum.map(r => [semLabel(r.semester) + ' ' + r.sheet_name, r.semester_score]));
+    const practicumMap = new Map(practicum.map(r => [labelKey(r), r.semester_score]));
     datasets.push({
       label: '實驗 Practicum',
       data: allLabels.map(lbl => practicumMap.has(lbl) ? practicumMap.get(lbl) : null),
@@ -2294,13 +2300,22 @@ function renderProfile(sid) {
     });
   }
 
+  // BUG-4 FIX: 單點時加左右 layout padding，避免點貼壁
+  const isSinglePoint = allLabels.length === 1;
+
   mkChart('chartProfile', {
     type: 'line',
     data: { labels: allLabels, datasets },
     options: {
       ...CHART_DEFAULTS,
+      layout: isSinglePoint ? { padding: { left: 60, right: 60 } } : {},
       scales: {
-        x: { type: 'category', ticks: { color: '#6b748f', font: { size: 9 } }, grid: { color: '#1c2030' } },
+        x: {
+          type: 'category',
+          ticks: { color: '#6b748f', font: { size: 9 } },
+          grid: { color: '#1c2030' },
+          offset: true,
+        },
         y: { ...CHART_DEFAULTS.scales.y, min: 0, max: 100 }
       }
     }
