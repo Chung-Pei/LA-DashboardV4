@@ -256,6 +256,14 @@ select option {
 .filter-pair {
   display: contents; /* transparent in flex, items appear as direct children */
 }
+/* 搜尋學號欄：作為整體 flex item，限制總寬 */
+.filter-pair-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 1 300px;
+  min-width: 220px;
+}
 @media (max-width: 600px) {
   .filter-bar {
     flex-direction: column;
@@ -286,6 +294,16 @@ select option {
     min-width: 0;
   }
   .filter-sep { display: none; }
+  .filter-pair-search {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    width: 100%;
+    flex: none;
+  }
+  .filter-pair-search .search-wrap,
+  #cFilterGeneral .search-wrap { max-width: none; flex: 1; min-width: 0; }
 }
 
 /* ── STAT CARDS ── */
@@ -547,7 +565,9 @@ body.chart-expanded-open { overflow: hidden; }
 .tl-tags { display: flex; flex-wrap: wrap; gap: 4px; }
 
 /* ── SEARCH ── */
-.search-wrap { position: relative; flex: 1; min-width: 160px; }
+.search-wrap { position: relative; flex: 1 1 160px; min-width: 160px; }
+/* 全體學生篩選器：搜尋欄限寬，避免撐滿整列 */
+#cFilterGeneral .search-wrap { max-width: 200px; }
 .search-wrap input { width: 100%; padding-left: 32px; }
 .search-icon {
   position: absolute;
@@ -1515,7 +1535,7 @@ body.light .behavior-range-badge {
     <div class="filter-sep"></div>
 
     <!-- 6. 搜尋學號（選填，高亮用） -->
-    <div class="filter-pair">
+    <div class="filter-pair-search">
       <span class="filter-label">搜尋學號 Search ID</span>
       <div class="search-wrap">
         <span class="search-icon">🔍</span>
