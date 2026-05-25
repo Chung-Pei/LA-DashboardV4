@@ -2858,31 +2858,25 @@ function renderCorrelation(filtered) {
     ? `全體回歸線  r=${regAll.r}  y=${regAll.slope}x${regAll.intercept >= 0 ? '+' : ''}${regAll.intercept}`
     : '';
 
-  // 指定學制時：在圖表容器上方渲染切換按鈕
-  const btnContainerId = 'corrToggleAllRegBtn';
-  let btnContainer = document.getElementById(btnContainerId);
+  // 指定學制時：在圖表容器上方渲染切換按鈕（每次強制重建，避免事件綁定殘留）
+  document.getElementById('corrToggleAllRegBtn')?.remove();
   if (!isAllProg && regAll?.available === true) {
-    if (!btnContainer) {
-      btnContainer = document.createElement('div');
-      btnContainer.id = btnContainerId;
-      btnContainer.style.cssText = 'text-align:right;margin-bottom:6px;';
-      const canvas = document.getElementById('chartCorrelation');
-      canvas?.parentNode?.insertBefore(btnContainer, canvas);
-    }
-    btnContainer.innerHTML = `<button
-      id="corrToggleAllRegBtn_btn"
-      onclick="window._toggleCorrAllReg()"
-      style="
-        font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;
-        border:1px solid rgba(247,164,79,0.6);
-        background:${_corrShowAllReg ? 'rgba(247,164,79,0.18)' : 'transparent'};
-        color:${_corrShowAllReg ? 'rgba(247,164,79,1)' : 'var(--text-dim,#9aa0b8)'};
-        transition:background 0.15s,color 0.15s;
-      ">
-      ${_corrShowAllReg ? '▶ 隱藏全體回歸線' : '▷ 顯示全體回歸線'}
-    </button>`;
-  } else if (btnContainer) {
-    btnContainer.remove();
+    const btnContainer = document.createElement('div');
+    btnContainer.id = 'corrToggleAllRegBtn';
+    btnContainer.style.cssText = 'text-align:right;margin-bottom:6px;';
+    const btn = document.createElement('button');
+    btn.textContent = _corrShowAllReg ? '▶ 隱藏全體回歸線' : '▷ 顯示全體回歸線';
+    btn.style.cssText = [
+      'font-size:11px', 'padding:3px 10px', 'border-radius:4px', 'cursor:pointer',
+      'border:1px solid rgba(247,164,79,0.6)',
+      _corrShowAllReg ? 'background:rgba(247,164,79,0.18)' : 'background:transparent',
+      _corrShowAllReg ? 'color:rgba(247,164,79,1)' : 'color:var(--text-dim,#9aa0b8)',
+      'transition:background 0.15s,color 0.15s',
+    ].join(';');
+    btn.addEventListener('click', () => { _corrShowAllReg = !_corrShowAllReg; renderD(); });
+    btnContainer.appendChild(btn);
+    const canvas = document.getElementById('chartCorrelation');
+    canvas?.parentNode?.insertBefore(btnContainer, canvas);
   }
 
   const rDatasetAll = hasRegAll ? [{
@@ -2983,12 +2977,6 @@ function renderCorrelation(filtered) {
   // 方案 1：圖表下方摘要表格
   _renderEnrollmentSummary(programs, optData);
 }
-
-// 全體回歸線切換（由按鈕 onclick 呼叫）
-window._toggleCorrAllReg = function() {
-  _corrShowAllReg = !_corrShowAllReg;
-  renderD();
-};
 
 /**
  * 顯示當前篩選有資料的學制 + 全體合併（all）。
