@@ -668,7 +668,12 @@ function closeExpandedChart() {
     btn.title = '放大圖表';
     btn.setAttribute('aria-label', '放大圖表');
   }
-  requestAnimationFrame(() => resizeChartsInCard(card));
+  // 與展開邏輯對稱：等 CSS transition 縮小完成後再 resize
+  card.addEventListener('transitionend', function _onClose() {
+    card.removeEventListener('transitionend', _onClose);
+    resizeChartsInCard(card);
+  }, { once: true });
+  setTimeout(() => resizeChartsInCard(card), 320);  // fallback
 }
 
 function toggleChartExpanded(btn) {
@@ -2784,7 +2789,13 @@ function renderBoxPlot(allClasses, filterProg) {
 
   const isDark=!document.body.classList.contains('light');
   // 讀取容器實際高度（展開後會變大）；fallback 240
-  const containerH = (wrap.clientHeight > 60 ? wrap.clientHeight : 240);
+  // 縮小狀態時先清除 SVG 殘留的 height style，讓容器回到 CSS 預設高度再量測
+  const existingSvg = wrap.querySelector('svg');
+  if (existingSvg) existingSvg.style.height = '';
+  const isExpanded = wrap.closest('.chart-card')?.classList.contains('chart-expanded');
+  const containerH = isExpanded
+    ? (wrap.clientHeight > 60 ? wrap.clientHeight : 240)
+    : 240;  // 縮小狀態固定回 240，不依賴 clientHeight
   const W=Math.max(300,programs.length*90+60), H=containerH;
   const pad={l:40,r:10,t:10,b:50}, innerH=H-pad.t-pad.b, innerW=W-pad.l-pad.r;
   const scaleY=v=>pad.t+innerH*(1-(v/100));
