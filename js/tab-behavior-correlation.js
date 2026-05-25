@@ -749,13 +749,33 @@ const BehaviorCorrelationTab = (() => {
           <tbody>${rows}</tbody>
         </table>
       </div>
-      <p class="text-muted small mb-0">
-        點擊儲存格可查看散佈圖（${isSpearman ? "Spearman ρ" : "Pearson r"}）。色彩：
-        <span style="background:${_rToColor(0.6)};color:#fff;padding:1px 6px;border-radius:3px">強正相關</span>
-        <span style="background:${_rToColor(-0.6)};color:#fff;padding:1px 6px;border-radius:3px;margin-left:4px">強負相關</span>
-        <span style="background:${_rToColor(0)};color:var(--text,#dde3f5);padding:1px 6px;border-radius:3px;margin-left:4px">無相關</span>
+      <div style="margin-top:6px;display:flex;flex-wrap:wrap;align-items:center;gap:10px">
+        <span class="text-muted small">點擊儲存格查看散佈圖（${isSpearman ? "Spearman ρ" : "Pearson r"}）</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:.75rem;color:var(--text-dim,#888)">負相關</span>
+          <div style="position:relative;width:200px;height:16px;border-radius:4px;overflow:visible">
+            <div style="width:200px;height:16px;border-radius:4px;background:linear-gradient(to right,
+              ${_rToColor(-1.0)},
+              ${_rToColor(-0.6)},
+              ${_rToColor(-0.3)},
+              ${_rToColor(0)},
+              ${_rToColor(0.3)},
+              ${_rToColor(0.6)},
+              ${_rToColor(1.0)}
+            );"></div>
+            <div style="display:flex;justify-content:space-between;margin-top:2px;width:200px">
+              <span style="font-size:.68rem;color:var(--text-dim,#888)">−1.0</span>
+              <span style="font-size:.68rem;color:var(--text-dim,#888)">−0.3</span>
+              <span style="font-size:.68rem;color:var(--text-dim,#888)">0</span>
+              <span style="font-size:.68rem;color:var(--text-dim,#888)">+0.3</span>
+              <span style="font-size:.68rem;color:var(--text-dim,#888)">+1.0</span>
+            </div>
+          </div>
+          <span style="font-size:.75rem;color:var(--text-dim,#888)">正相關</span>
+        </div>
+        <span style="font-size:.75rem;color:var(--accent3,#f7a44f)">|r| ≥ 0.3 值得關注</span>
         ${filteredNote}
-      </p>`;
+      </div>`;
     el.querySelectorAll("[data-corr-feat][data-corr-target]").forEach(cell => {
       cell.addEventListener("click", () => showScatter(cell.dataset.corrFeat, cell.dataset.corrTarget));
     });
