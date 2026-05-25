@@ -652,6 +652,8 @@ function resizeChartsInCard(card) {
     if (config) prepareScrollableChart(canvas, config);
     chart.resize();
   });
+  // SVG 類圖表（箱形圖）：容器尺寸改變後重繪，讓 viewBox 基準重算
+  if (card.querySelector('#boxplotWrap')) renderD();
 }
 
 function closeExpandedChart() {
@@ -681,7 +683,12 @@ function toggleChartExpanded(btn) {
   btn.textContent = '×';
   btn.title = '縮小圖表';
   btn.setAttribute('aria-label', '縮小圖表');
-  requestAnimationFrame(() => resizeChartsInCard(card));
+  // 等 CSS transition 完成後 resize（SVG boxplot 需要正確 clientHeight）
+  card.addEventListener('transitionend', function _onExpand() {
+    card.removeEventListener('transitionend', _onExpand);
+    resizeChartsInCard(card);
+  }, { once: true });
+  setTimeout(() => resizeChartsInCard(card), 320);  // fallback
 }
 
 function attachChartExpandButtons() {
@@ -2776,14 +2783,17 @@ function renderBoxPlot(allClasses, filterProg) {
   });
 
   const isDark=!document.body.classList.contains('light');
-  const W=Math.max(300,programs.length*90+60), H=240;
+  // 讀取容器實際高度（展開後會變大）；fallback 240
+  const containerH = (wrap.clientHeight > 60 ? wrap.clientHeight : 240);
+  const W=Math.max(300,programs.length*90+60), H=containerH;
   const pad={l:40,r:10,t:10,b:50}, innerH=H-pad.t-pad.b, innerW=W-pad.l-pad.r;
   const scaleY=v=>pad.t+innerH*(1-(v/100));
   const textCol=isDark?'#9aa0b8':'#4a5070';
   const bgCol=isDark?'#13161f':'#ffffff';
   const gridCol=isDark?'#242840':'#e0e4f0';
 
-  let svg=`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" style="display:block;min-width:${W}px">`;
+  // viewBox + width:100% 讓 SVG 隨容器縮放；min-width 防止過窄
+  let svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="100%" style="display:block;min-width:${W}px;height:100%">`;
   svg+=`<rect width="${W}" height="${H}" fill="${bgCol}" rx="8"/>`;
 
   [0,25,50,60,75,100].forEach(v=>{
@@ -2854,34 +2864,11 @@ function renderCorrelation(filtered) {
   const hasRegAll = isAllProg
     ? (regAll?.available === true)
     : (_corrShowAllReg && regAll?.available === true);
-  const rLabelAll = hasRegAll
-    ? `全體回歸線  r=${regAll.r}  y=${regAll.slope}x${regAll.intercept >= 0 ? '+' : ''}${regAll.intercept}`
-    : '';
 
-  // 指定學制時：在圖表容器上方渲染切換按鈕（每次強制重建，避免事件綁定殘留）
-  document.getElementById('corrToggleAllRegBtn')?.remove();
-  if (!isAllProg && regAll?.available === true) {
-    const btnContainer = document.createElement('div');
-    btnContainer.id = 'corrToggleAllRegBtn';
-    btnContainer.style.cssText = 'text-align:right;margin-bottom:6px;';
-    const btn = document.createElement('button');
-    btn.textContent = _corrShowAllReg ? '▶ 隱藏全體回歸線' : '▷ 顯示全體回歸線';
-    btn.style.cssText = [
-      'font-size:11px', 'padding:3px 10px', 'border-radius:4px', 'cursor:pointer',
-      'border:1px solid rgba(247,164,79,0.6)',
-      _corrShowAllReg ? 'background:rgba(247,164,79,0.18)' : 'background:transparent',
-      _corrShowAllReg ? 'color:rgba(247,164,79,1)' : 'color:var(--text-dim,#9aa0b8)',
-      'transition:background 0.15s,color 0.15s',
-    ].join(';');
-    btn.addEventListener('click', () => { _corrShowAllReg = !_corrShowAllReg; renderD(); });
-    btnContainer.appendChild(btn);
-    const canvas = document.getElementById('chartCorrelation');
-    canvas?.parentNode?.insertBefore(btnContainer, canvas);
-  }
-
+  // WARN-2 fix: intercept 加 toFixed(2) 避免浮點顯示雜訊
   const rDatasetAll = hasRegAll ? [{
-    label:       rLabelAll,
-    data:        regAll.line,
+    label: `全體回歸線  r=${regAll.r}  y=${regAll.slope}x${+regAll.intercept >= 0 ? '+' : ''}${(+regAll.intercept).toFixed(2)}`,
+    data:        regAll?.line ?? [],   // WARN-1 fix: 防禦 undefined line
     type:        'line',
     borderColor: 'rgba(247,164,79,0.85)',
     borderWidth: 2,
@@ -2889,7 +2876,7 @@ function renderCorrelation(filtered) {
     pointRadius: 0,
     fill:        false,
     tension:     0,
-    _progKey:    'all',   // 供 tooltip 識別
+    _progKey:    'all',
   }] : [];
 
   // 各學制回歸線（依 PROGRAM_COLORS，細實線）
@@ -2973,6 +2960,31 @@ function renderCorrelation(filtered) {
       },
     },
   });
+
+  // BUG-1 fix: 按鈕插入在 mkChart 之後，鎖定 .chart-wrap 規避 prepareScrollableChart 的 canvas 重包行為
+  // 每次強制重建，避免 addEventListener 殘留舊閉包
+  document.getElementById('corrToggleAllRegBtn')?.remove();
+  if (!isAllProg && regAll?.available === true) {
+    const canvas = document.getElementById('chartCorrelation');
+    const anchor = canvas?.closest('.chart-wrap') ?? canvas?.parentNode;
+    if (anchor) {
+      const btnContainer = document.createElement('div');
+      btnContainer.id = 'corrToggleAllRegBtn';
+      btnContainer.style.cssText = 'text-align:right;margin-bottom:6px;';
+      const btn = document.createElement('button');
+      btn.textContent = _corrShowAllReg ? '▶ 隱藏全體回歸線' : '▷ 顯示全體回歸線';
+      btn.style.cssText = [
+        'font-size:11px', 'padding:3px 10px', 'border-radius:4px', 'cursor:pointer',
+        'border:1px solid rgba(247,164,79,0.6)',
+        _corrShowAllReg ? 'background:rgba(247,164,79,0.18)' : 'background:transparent',
+        _corrShowAllReg ? 'color:rgba(247,164,79,1)' : 'color:var(--text-dim,#9aa0b8)',
+        'transition:background 0.15s,color 0.15s',
+      ].join(';');
+      btn.addEventListener('click', () => { _corrShowAllReg = !_corrShowAllReg; renderD(); });
+      btnContainer.appendChild(btn);
+      anchor.insertBefore(btnContainer, anchor.firstChild);
+    }
+  }
 
   // 方案 1：圖表下方摘要表格
   _renderEnrollmentSummary(programs, optData);
