@@ -15,6 +15,37 @@
  *           有篩選時以 _pearsonValue/_spearmanValue 即時重算，
  *           全量（all）時仍優先用 ETL 值避免不必要運算。
  *           篩選後 p-value 無法可靠估算，改顯示 n=筆數。
+ *
+ * FIXED (2025-05, v2):
+ *   BUG5 — _pearsonValue / _spearmanValue 改回傳 {r, reason, n?} 診斷物件後，
+ *           _liveR、showScatter 中的 rho、insights badge 中的 bestR 仍以舊格式
+ *           純數字處理，導致 .toFixed()、Math.abs()、>= 0 等比較對物件運算失效；
+ *           分別在 _liveR 回傳前解包、rhoResult?.r、_pearsonValue(...)?.r 修正。
+ *   OPT1 — isUnfiltered 邏輯重複定義 3 次；提取為模組級 _isUnfiltered() helper。
+ *
+ * FIXED (2025-05, v3 — systematic-debugging):
+ *   DEAD1 — corrLabelInFooter：計算後從未使用，移除。
+ *   DEAD2 — _currentTarget：寫入後從未讀取，移除。
+ *   DEAD3 — _allEduTypes：UI 已移除，收集後從未讀取，移除。
+ *   DEAD4 — _scatterChart = null 後立即重賦值，多餘賦值移除。
+ *   DEAD5 — 7 處行內 FIX BUGx 注解已整合入 header，清除。
+ *   BUG6  — result?.r ?? result 舊格式相容分支：_getR 已統一回傳
+ *           {r,...} 物件，純數字 fallback 永遠不會觸發且遮蔽型別錯誤；移除。
+ *   OPT3  — segKey 字串在 _renderHeatmap / _renderInsightsBadge 重複計算；
+ *           提取為 _segKey() helper。
+ *   OPT4  — 重複分區注解 '取得篩選後資料' + '篩選快取' 合併為一。
+ *   OPT5  — 熱力圖圖例 HTML 硬編碼，與 REASON_CONFIG 資料重複；
+ *           改從 REASON_CONFIG 動態產生，維護單一來源。
+ *
+ * FIXED (2025-05, v4 — systematic-debugging):
+ *   DEAD6 — _renderHeatmap 上方 BUG4 comment block（5行）已整合入 header，清除。
+ *   DEAD7 — '// ── Modal 開關事件' 分區注解多餘，清除。
+ *   DEAD8 — _filterEduType filter branch 在 _filteredScatterData 內：
+ *           onFilterChange/resetFilters 皆硬設為 "all" 且無 UI，
+ *           此 if 分支永遠不執行，移除。
+ *   BUG7  — stat.p?.toFixed(4)：stat.p != null 已守衛，?.toFixed 多餘且遮蔽意圖；改為 .toFixed。
+ *   OPT6  — _canUseSegPearson / _canUseSegBadge 含 _filterEduType === "all" 永遠 true；
+ *           提取為 _canUseSeg() helper，移除冗餘條件，兩處共用。
  */
 
 const BehaviorCorrelationTab = (() => {
@@ -57,22 +88,72 @@ const BehaviorCorrelationTab = (() => {
 
   const PASS_THRESHOLD_CORR = 60;   // 及格門檻（與 time tab 保持一致）
 
+  // ── 無法計算原因設定（熱力圖診斷顯示用）────────────────────
+  const REASON_CONFIG = {
+    no_etl: {
+      symbol:  "∅",
+      label:   "ETL 無此欄位",
+      detail:  "ETL 預算值中無此指標，請重跑 ETL 後重整頁面。",
+      color:   "rgba(255,90,60,0.18)",
+      border:  "1px solid rgba(255,90,60,0.5)",
+      txtCls:  "text-danger",
+    },
+    insufficient: {
+      symbol:  "n↓",
+      label:   "樣本不足",
+      detail:  "有效配對樣本數不足（需 ≥ 5）{nHint}，無法計算相關係數。",
+      color:   "rgba(255,193,7,0.15)",
+      border:  "1px solid rgba(255,193,7,0.45)",
+      txtCls:  "text-warning",
+    },
+    no_variance: {
+      symbol:  "σ=0",
+      label:   "數值無變異",
+      detail:  "所有人數值完全相同（變異數為 0）{nHint}，Pearson/Spearman 分母為零，無法計算。",
+      color:   "rgba(120,130,160,0.12)",
+      border:  "1px solid rgba(120,130,160,0.35)",
+      txtCls:  "text-muted",
+    },
+  };
+
   let _corrData     = null;
   let _scatterChart = null;
-  let _currentTarget = null;
 
   // ── 篩選狀態 ─────────────────────────────────────────────
   let _allScatterData   = null;   // 全量 scatter_data（篩選的基底）
   let _behaviorByMasked = null;   // masked_id → behavior student
   let _behaviorByAnon   = null;   // anon_id → behavior student
   let _allSemesters     = [];     // 可用學期列表
-  let _allEduTypes      = [];
   let _filterSemester   = "all";
   let _filterCluster    = "all";
   let _filterPass       = "all";
   let _filterEduType    = "all";
   let _filterOutlier    = false;
   let _corrType         = "pearson";
+
+  /** 判斷目前篩選狀態是否為「全量」（所有篩選器皆為 all，無排除異常值） */
+  function _isUnfiltered() {
+    return (
+      _filterSemester === "all" &&
+      _filterCluster  === "all" &&
+      _filterPass     === "all" &&
+      _filterEduType  === "all" &&
+      !_filterOutlier
+    );
+  }
+
+  /** segment_pearson 查詢鍵（學期|分群|及格狀況） */
+  function _segKey() {
+    return `${_filterSemester}|${_filterCluster}|${_filterPass}`;
+  }
+
+  /**
+   * 是否可使用 segment_pearson 預聚合資料。
+   * eduType 已無 UI，永遠為 "all"；排除異常值時 ETL 預聚合不適用。
+   */
+  function _canUseSeg() {
+    return !_filterOutlier;
+  }
 
   /**
    * 讀取目前相關係數矩陣中的 r 值。
@@ -119,9 +200,6 @@ const BehaviorCorrelationTab = (() => {
     return Object.keys(p);
   }
 
-  // ── FIX BUG1/BUG2：_scatterRows 改接受外部 rows 參數 ────
-  // 讀取順序：傳入的 rows → _lastFiltered（篩選快取）→ _allScatterData → 原始資料
-  // 不再讀 _corrData.scatter_data，避免被 _applyFiltersAndRender 覆蓋後污染基底。
   function _scatterRows(feat, target, rows) {
     const raw = rows ?? _lastFiltered ?? _allScatterData ?? _corrData?.scatter_data ?? [];
     if (Array.isArray(raw)) {
@@ -161,11 +239,18 @@ const BehaviorCorrelationTab = (() => {
     return hasR && hasScatter;
   }
 
+  /**
+   * 回傳 { r: number } 或 { r: null, reason: string, n?: number }
+   * reason 值：
+   *   "no_etl"       — ETL 預算值本身缺失（全量模式專用，由 _getR 注入）
+   *   "insufficient" — 有效配對樣本數不足（< 5）
+   *   "no_variance"  — 所有人數值相同，變異數為 0
+   */
   function _pearsonValue(rows, feat, target) {
     const pairs = rows
       .map(row => ({ x: _toNumber(row.features?.[feat]), y: _toNumber(row[target]) }))
       .filter(p => p.x !== null && p.y !== null);
-    if (pairs.length < 5) return null;
+    if (pairs.length < 5) return { r: null, reason: "insufficient", n: pairs.length };
     const meanX = pairs.reduce((sum, p) => sum + p.x, 0) / pairs.length;
     const meanY = pairs.reduce((sum, p) => sum + p.y, 0) / pairs.length;
     let num = 0;
@@ -179,8 +264,8 @@ const BehaviorCorrelationTab = (() => {
       denY += dy * dy;
     });
     const den = Math.sqrt(denX * denY);
-    if (!den) return null;
-    return Math.round((num / den) * 10000) / 10000;
+    if (!den) return { r: null, reason: "no_variance", n: pairs.length };
+    return { r: Math.round((num / den) * 10000) / 10000 };
   }
 
   // ── Spearman 等級相關係數 ─────────────────────────────────
@@ -203,7 +288,7 @@ const BehaviorCorrelationTab = (() => {
     const pairs = rows
       .map(row => ({ x: _toNumber(row.features?.[feat]), y: _toNumber(row[target]) }))
       .filter(p => p.x !== null && p.y !== null);
-    if (pairs.length < 5) return null;
+    if (pairs.length < 5) return { r: null, reason: "insufficient", n: pairs.length };
     const xs = pairs.map(p => p.x);
     const ys = pairs.map(p => p.y);
     const rx = _rankArray(xs), ry = _rankArray(ys);
@@ -216,7 +301,8 @@ const BehaviorCorrelationTab = (() => {
       num += dx * dy; dX += dx * dx; dY += dy * dy;
     }
     const den = Math.sqrt(dX * dY);
-    return den ? Math.round(num / den * 10000) / 10000 : null;
+    if (!den) return { r: null, reason: "no_variance", n };
+    return { r: Math.round(num / den * 10000) / 10000 };
   }
 
   // ── 初始化 ───────────────────────────────────────────────
@@ -261,10 +347,6 @@ const BehaviorCorrelationTab = (() => {
       _allSemesters = Array.isArray(_corrData?.meta?.semesters)
         ? _corrData.meta.semesters
         : (behaviorData?.meta?.semesters || []);
-
-      _allEduTypes = Array.isArray(_allScatterData)
-        ? [...new Set(_allScatterData.map(r => r.edu_type).filter(Boolean))]
-        : [];
 
       _filterSemester = "all";
       _filterCluster  = "all";
@@ -325,8 +407,6 @@ const BehaviorCorrelationTab = (() => {
       `<option value="pass">及格</option>`,
       `<option value="fail">不及格</option>`,
     ].join("");
-
-    // 修課類型（_allEduTypes / _filterEduType）保留內部邏輯，UI 已移除（規格書 §四）
 
     const hasOutlierData = Object.keys(_corrData?.outlier_thresholds || {}).length > 0;
 
@@ -396,9 +476,6 @@ const BehaviorCorrelationTab = (() => {
     btnS.style.cssText = `font-size:.76rem;padding:3px 9px;border-radius:0 6px 6px 0;border:1px solid ${ac};background:${ip ? "transparent" : ac};color:${ip ? ac : "#fff"};cursor:pointer;font-family:inherit;font-weight:${ip ? "400" : "700"}`;
   }
 
-  // ── FIX BUG3：setCorrType 改呼叫 _applyFiltersAndRender ──
-  // 原本只呼叫 _renderHeatmap + 條件式 showScatter，
-  // 切換方法時散佈圖不會連動更新篩選後的正確資料集。
   function setCorrType(type) {
     _corrType = type;
     _lastFilterKey = null;   // 強制清快取，確保重新過濾
@@ -435,9 +512,7 @@ const BehaviorCorrelationTab = (() => {
     _applyFiltersAndRender("corrHeatmap", "scatterSection");
   }
 
-  // ── 取得篩選後資料 ────────────────────────────────────────
-
-  // ── 篩選快取：條件未變時不重新過濾 ──────────────────────
+  // ── 篩選快取：條件未變時不重新過濾 ─────────────────────────
   let _lastFilterKey  = null;
   let _lastFiltered   = null;
 
@@ -465,9 +540,6 @@ const BehaviorCorrelationTab = (() => {
         if (_filterPass === "pass" && !passing) return false;
         if (_filterPass === "fail" && passing) return false;
       }
-      if (_filterEduType !== "all") {
-        if ((row.edu_type || "") !== _filterEduType) return false;
-      }
       if (_filterOutlier && Object.keys(thresholds).length) {
         for (const [feat, bounds] of Object.entries(thresholds)) {
           const val = _toNumber(row.features?.[feat]);
@@ -481,7 +553,6 @@ const BehaviorCorrelationTab = (() => {
     return _lastFiltered;
   }
 
-  // ── FIX BUG1：移除 _corrData 覆蓋，改以 filtered 傳遞給下游 ──
   function _applyFiltersAndRender(heatmapId, scatterWrapperId) {
     const filtered = _filteredScatterData();
     const count = Array.isArray(filtered) ? filtered.length : "—";
@@ -516,13 +587,7 @@ const BehaviorCorrelationTab = (() => {
     const backLabel  = GRADE_LABELS[back_target]  || back_target;
 
     // 判斷是否為全量模式（篩選器皆為 all）
-    const isUnfiltered = (
-      _filterSemester === "all" &&
-      _filterCluster  === "all" &&
-      _filterPass     === "all" &&
-      _filterEduType  === "all" &&
-      !_filterOutlier
-    );
+    const isUnfiltered = _isUnfiltered();
 
     // 篩選模式下即時重算 r 值，取代 ETL 靜態值
     const activeRows = (!isUnfiltered && Array.isArray(filteredRows) && filteredRows.length > 0)
@@ -533,8 +598,10 @@ const BehaviorCorrelationTab = (() => {
     const rows = Object.entries(results)
       .map(([feat, v]) => {
         if (!activeRows) return [feat, v];  // 全量：直接用 ETL 值
-        const fr = _pearsonValue(activeRows, feat, front_target);
-        const br = _pearsonValue(activeRows, feat, back_target);
+        const frResult = _pearsonValue(activeRows, feat, front_target);
+        const brResult = _pearsonValue(activeRows, feat, back_target);
+        const fr = frResult?.r ?? null;
+        const br = brResult?.r ?? null;
         const lagDelta = (fr != null && br != null) ? +(br - fr).toFixed(4) : null;
         return [feat, {
           front: fr != null ? { r: fr, p: null, significant: false } : null,
@@ -558,7 +625,7 @@ const BehaviorCorrelationTab = (() => {
       const sig = (!activeRows && stat.significant) ? "*" : "";
       const tipDetail = activeRows
         ? `n=${activeRows.length}`
-        : (stat.p != null ? `p=${stat.p < 1e-6 ? "<0.000001" : stat.p?.toFixed(4)}` : "");
+        : (stat.p != null ? `p=${stat.p < 1e-6 ? "<0.000001" : stat.p.toFixed(4)}` : "");
       return `<td class="text-center small"
                   style="background:${bg};color:${tc}"
                   title="r=${r >= 0 ? "+" : ""}${r.toFixed(3)} ${tipDetail}">
@@ -599,12 +666,140 @@ const BehaviorCorrelationTab = (() => {
     section.id = "corrLaggedSection";
     section.style.cssText = "margin-top:20px";
     section.innerHTML = `
-      <h6 class="fw-semibold mb-1" style="font-size:.88rem">
+      <h6 class="fw-semibold mb-1" style="font-size:.88rem;display:flex;align-items:center;gap:8px">
         ⏱ 時間滯後相關性
-        <span style="font-size:.75rem;font-weight:400;color:var(--text-dim,#888);margin-left:6px">
+        <span style="font-size:.75rem;font-weight:400;color:var(--text-dim,#888)">
           行為指標 vs 前段（${frontLabel}）/ 後段（${backLabel}）
         </span>
+        <button id="btnLaggedHelp"
+          style="margin-left:4px;width:18px;height:18px;border-radius:50%;border:1px solid var(--accent,#3498db);
+                 background:transparent;color:var(--accent,#3498db);font-size:.7rem;font-weight:700;
+                 cursor:pointer;line-height:1;padding:0;flex-shrink:0"
+          title="說明此分析圖">?</button>
       </h6>
+
+      <!-- 說明 Modal -->
+      <div id="laggedHelpModal" style="display:none;position:fixed;inset:0;z-index:9999;
+           background:rgba(0,0,0,.6);overflow-y:auto;padding:24px 12px">
+        <div style="max-width:620px;margin:auto;background:var(--card-bg,#1a1f35);border:1px solid var(--border,#2a3050);
+                    border-radius:14px;padding:28px 28px 22px;position:relative;font-size:.88rem;
+                    color:var(--text,#dde3f5);line-height:1.75">
+          <button id="btnLaggedHelpClose"
+            style="position:absolute;top:14px;right:16px;background:transparent;border:none;
+                   font-size:1.3rem;color:var(--text-dim,#888);cursor:pointer;line-height:1">✕</button>
+
+          <h5 style="margin:0 0 18px;font-size:1rem;color:var(--text,#eef)">
+            ⏱ 時間滯後相關性分析說明
+          </h5>
+
+          <div style="margin-bottom:16px">
+            <div style="font-weight:700;color:var(--accent,#3498db);margin-bottom:6px">▍ 分析目的</div>
+            <p style="margin:0">
+              判斷某項學習行為對「前段成績（${frontLabel}）」與「後段成績（${backLabel}）」的預測力是否存在差異。
+              若一個行為與後段成績的相關性明顯高於前段，代表這個行為的效果需要時間積累才能顯現；
+              反之，若前段相關性更高，代表行為對早期表現影響更即時。
+            </p>
+          </div>
+
+          <div style="margin-bottom:16px">
+            <div style="font-weight:700;color:var(--accent,#3498db);margin-bottom:6px">▍ 計算原理</div>
+            <p style="margin:0 0 8px">
+              對每項學習行為指標，分別計算其與前段、後段成績的 Pearson 相關係數（r），
+              再取兩者之差作為「預測增量 Δ」：
+            </p>
+            <div style="background:rgba(52,152,219,.08);border-left:3px solid var(--accent,#3498db);
+                        border-radius:0 6px 6px 0;padding:10px 14px;font-family:monospace;font-size:.85rem">
+              Δ = r（${backLabel}）− r（${frontLabel}）
+            </div>
+            <p style="margin:8px 0 0;color:var(--text-dim,#9aa0b8);font-size:.82rem">
+              僅顯示至少一欄 |r| ≥ 0.1 的指標，並依 |Δ| 由大到小排序，讓差異最顯著的行為優先呈現。
+            </p>
+          </div>
+
+          <div style="margin-bottom:16px">
+            <div style="font-weight:700;color:var(--accent,#3498db);margin-bottom:6px">▍ 欄位說明</div>
+            <table style="width:100%;border-collapse:collapse;font-size:.82rem">
+              <thead>
+                <tr style="color:var(--text-dim,#888);border-bottom:1px solid var(--border,#2a3050)">
+                  <th style="text-align:left;padding:4px 8px;font-weight:600">欄位</th>
+                  <th style="text-align:left;padding:4px 8px;font-weight:600">說明</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style="border-bottom:1px solid rgba(255,255,255,.06)">
+                  <td style="padding:6px 8px;white-space:nowrap">${frontLabel}</td>
+                  <td style="padding:6px 8px">該行為指標與前段考試成績的 Pearson r 值，色彩同熱力圖（藍正紅負）</td>
+                </tr>
+                <tr style="border-bottom:1px solid rgba(255,255,255,.06)">
+                  <td style="padding:6px 8px;white-space:nowrap">${backLabel}</td>
+                  <td style="padding:6px 8px">該行為指標與後段考試成績的 Pearson r 值</td>
+                </tr>
+                <tr>
+                  <td style="padding:6px 8px;white-space:nowrap">Δ 預測增量</td>
+                  <td style="padding:6px 8px">後段 r − 前段 r，反映行為預測力的時間性偏移方向與幅度</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div style="margin-bottom:20px">
+            <div style="font-weight:700;color:var(--accent,#3498db);margin-bottom:10px">▍ 結果判讀</div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
+                          background:rgba(39,174,96,.08);border:1px solid rgba(39,174,96,.25);border-radius:8px">
+                <span style="font-size:1rem;flex-shrink:0">▲</span>
+                <div>
+                  <div style="font-weight:600;color:rgba(39,174,96,.95)">正增量（Δ &gt; +0.05）</div>
+                  <div style="font-size:.82rem;color:var(--text-dim,#9aa0b8);margin-top:2px">
+                    後段相關性顯著高於前段。行為效果遞延累積，學習投入需要時間才能反映在成績上。
+                    例如：穩定的學習頻率在期末比期中更有預測力，代表持續性習慣的長期回報。
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
+                          background:rgba(192,57,43,.08);border:1px solid rgba(192,57,43,.25);border-radius:8px">
+                <span style="font-size:1rem;flex-shrink:0">▼</span>
+                <div>
+                  <div style="font-weight:600;color:rgba(220,80,60,.95)">負增量（Δ &lt; −0.05）</div>
+                  <div style="font-size:.82rem;color:var(--text-dim,#9aa0b8);margin-top:2px">
+                    前段相關性顯著高於後段。行為對即時表現影響更強，但效果難以持續。
+                    例如：考前集中刷題對期中分數預測力較強，但此策略在期末已相對式微。
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
+                          background:rgba(120,130,160,.08);border:1px solid rgba(120,130,160,.25);border-radius:8px">
+                <span style="font-size:1rem;flex-shrink:0">≈</span>
+                <div>
+                  <div style="font-weight:600;color:var(--text-mid,#9aa0b8)">近零增量（−0.05 ≤ Δ ≤ +0.05）</div>
+                  <div style="font-size:.82rem;color:var(--text-dim,#9aa0b8);margin-top:2px">
+                    前後段預測力相近，行為的影響力在時間軸上穩定一致，無明顯遞延或遞減效應。
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;
+                          background:rgba(120,130,160,.05);border:1px solid rgba(120,130,160,.18);border-radius:8px">
+                <span style="font-size:1rem;flex-shrink:0">—</span>
+                <div>
+                  <div style="font-weight:600;color:var(--text-mid,#9aa0b8)">無法計算（—）</div>
+                  <div style="font-size:.82rem;color:var(--text-dim,#9aa0b8);margin-top:2px">
+                    該指標在此分群或篩選條件下樣本數不足（&lt; 5）、或所有人數值相同（變異數為 0），
+                    無法計算相關係數，Δ 亦無法得出。
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style="background:rgba(255,193,7,.07);border:1px solid rgba(255,193,7,.2);
+                      border-radius:8px;padding:10px 14px;font-size:.8rem;color:var(--text-dim,#9aa0b8)">
+            ⚠️ <strong style="color:var(--text,#dde3f5)">解讀注意</strong>：
+            Δ 反映的是相關性方向，而非因果關係。相關係數受樣本數、異常值及指標定義影響，
+            建議搭配散佈圖與分群篩選進一步確認。全量模式下標 * 者代表 p &lt; 0.05（統計顯著）。
+          </div>
+        </div>
+      </div>
+
       <div class="table-responsive">
         <table class="table table-sm table-bordered mb-1" style="font-size:.83rem">
           <thead>
@@ -619,20 +814,37 @@ const BehaviorCorrelationTab = (() => {
           <tbody>${tableRows}</tbody>
         </table>
       </div>
-      <p class="text-muted small mb-0">
-        ▲ 正增量：行為對後段成績的預測力高於前段，學習效益延續。
-        * p&lt;0.05。色彩同熱力圖。
-      </p>`;
+      <div class="text-muted small mb-0" style="line-height:1.9">
+        <div>
+          <span style="color:rgba(39,174,96,.9);font-weight:600">▲ 正增量（Δ &gt; +0.05）</span>
+          後段相關性顯著高於前段，行為效果遞延累積，學習習慣長期回報更佳。
+        </div>
+        <div>
+          <span style="color:rgba(220,80,60,.9);font-weight:600">▼ 負增量（Δ &lt; −0.05）</span>
+          前段相關性顯著高於後段，行為對即時表現影響更強，但效果難以持續至後段。
+        </div>
+        <div>
+          <span style="color:var(--text-mid,#9aa0b8);font-weight:600">≈ 近零增量（|Δ| ≤ 0.05）</span>
+          前後段預測力相近，行為影響力在時間軸上穩定一致。
+        </div>
+        <div>
+          <span style="color:var(--text-mid,#9aa0b8);font-weight:600">— 無法計算</span>
+          樣本不足（&lt; 5 筆）或所有人數值相同（σ = 0），Δ 無法得出。
+        </div>
+        <div style="margin-top:2px;opacity:.7">色彩同熱力圖（藍正紅負）。全量模式標 * 者 p &lt; 0.05。</div>
+      </div>`;
 
     anchor.parentNode.insertBefore(section, anchor.nextSibling);
+
+    const modal    = section.querySelector("#laggedHelpModal");
+    const btnOpen  = section.querySelector("#btnLaggedHelp");
+    const btnClose = section.querySelector("#btnLaggedHelpClose");
+    btnOpen.addEventListener("click",  () => { modal.style.display = "block"; });
+    btnClose.addEventListener("click", () => { modal.style.display = "none";  });
+    modal.addEventListener("click", e => { if (e.target === modal) modal.style.display = "none"; });
   }
 
   // ── Pearson 熱力圖（HTML table + 色彩映射）────────────────
-  //
-  // FIX BUG4：接受 filteredRows 參數
-  //   • filteredRows 為 null / undefined → 全量模式，優先讀 ETL 預算值（_corrData.pearson/spearman）
-  //   • filteredRows 為陣列（含全量）→ 即時重算 r，確保與篩選條件一致
-  //   • 篩選後無法可靠估算 p-value，改在 tooltip 顯示 n=筆數
   function _renderHeatmap(containerId, filteredRows) {
     const el = document.getElementById(containerId);
     if (!el || !_corrData) return;
@@ -643,13 +855,7 @@ const BehaviorCorrelationTab = (() => {
     const corrSym    = isSpearman ? "ρ" : "r";
 
     // 判斷是否為「全量」模式：篩選狀態全為 all 且無排除異常值
-    const isUnfiltered = (
-      _filterSemester === "all" &&
-      _filterCluster  === "all" &&
-      _filterPass     === "all" &&
-      _filterEduType  === "all" &&
-      !_filterOutlier
-    );
+    const isUnfiltered = _isUnfiltered();
 
     if (!features.length || !grades.length) {
       el.innerHTML = `<p class="text-muted small">相關性資料格式缺少 features / targets。</p>`;
@@ -661,25 +867,27 @@ const BehaviorCorrelationTab = (() => {
      *   全量模式 → 優先讀 ETL 預算值（精確且含 p-value）
      *   篩選模式 → 即時重算（_pearsonValue / _spearmanValue）
      */
-    // Phase D：segKey 僅在 eduType === "all" 時有效（ETL 無 eduType 維度預聚合）
-    const _canUseSegPearson = _filterEduType === "all" && !_filterOutlier;
-    const segKey = `${_filterSemester}|${_filterCluster}|${_filterPass}`;
-    const segData = _canUseSegPearson ? (_corrData?.segment_pearson?.[segKey] ?? null) : null;
+    // Phase D：segData 僅在未排除異常值時可用（ETL 無 eduType / outlier 維度預聚合）
+    const segKey  = _segKey();
+    const segData = _canUseSeg() ? (_corrData?.segment_pearson?.[segKey] ?? null) : null;
 
     function _getR(feat, g) {
       if (isUnfiltered) {
         // 全量：讀 ETL 預算值
-        return _pearson(feat, g);
+        const r = _pearson(feat, g);
+        if (r == null) return { r: null, reason: "no_etl" };
+        return { r };
       }
       // Phase D：篩選模式，優先讀 segment_pearson 預聚合
       if (segData?.pearson) {
-        // 嘗試 {target: {feat: {r,p,...}}} 格式
         const rObj = segData.pearson[g]?.[feat] ?? segData.pearson[feat]?.[g];
         if (rObj != null) {
-          return typeof rObj === "object" ? (rObj.r ?? null) : rObj;
+          const r = typeof rObj === "object" ? (rObj.r ?? null) : rObj;
+          if (r == null) return { r: null, reason: "no_etl" };
+          return { r };
         }
       }
-      // fallback：即時重算（原有邏輯）
+      // fallback：即時重算（回傳完整診斷物件）
       const rows = Array.isArray(filteredRows) ? filteredRows : (_lastFiltered ?? _allScatterData ?? []);
       return isSpearman
         ? _spearmanValue(rows, feat, g)
@@ -699,8 +907,27 @@ const BehaviorCorrelationTab = (() => {
 
     const rows = features.map(feat => {
       const cells = grades.map(g => {
-        const r = _getR(feat, g);
-        if (r == null) return `<td class="text-center text-muted small">—</td>`;
+        const result = _getR(feat, g);
+        const r      = result.r;
+
+        // ── r 值無效：依 reason 顯示診斷符號與 tooltip ──────
+        if (r == null) {
+          const reason = result?.reason ?? "no_etl";
+          const nHint  = (result?.n != null) ? `（有效樣本 ${result.n} 筆）` : "";
+          const cfg    = REASON_CONFIG[reason] ?? REASON_CONFIG.no_etl;
+          const detail = cfg.detail.replace("{nHint}", nHint);
+          const featLabel  = escapeHtml(FEAT_LABELS[feat] || feat);
+          const gradeLabel = escapeHtml(GRADE_LABELS[g] || g);
+          const tipText    = `${featLabel} vs ${gradeLabel}：${cfg.label}｜${detail}`;
+
+          return `<td class="text-center small ${cfg.txtCls}"
+                      style="background:${cfg.color};border:${cfg.border};cursor:help"
+                      title="${escapeHtml(tipText)}">
+                    <span style="font-size:.75em;letter-spacing:.02em">${cfg.symbol}</span>
+                  </td>`;
+        }
+
+        // ── r 值正常 ─────────────────────────────────────────
         const bg        = _rToColor(r);
         const textColor = Math.abs(r) > 0.55 ? "#fff" : "var(--text,#dde3f5)";
 
@@ -775,6 +1002,15 @@ const BehaviorCorrelationTab = (() => {
         </div>
         <span style="font-size:.75rem;color:var(--accent3,#f7a44f)">|r| ≥ 0.3 值得關注</span>
         ${filteredNote}
+      </div>
+      <div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:10px;font-size:.75rem;color:var(--text-dim,#999)">
+        <span style="font-weight:600;color:var(--text,#ccc)">無法顯示原因說明：</span>
+        ${Object.values(REASON_CONFIG).map(cfg => `
+        <span style="display:inline-flex;align-items:center;gap:4px">
+          <span style="background:${cfg.color};border:${cfg.border};border-radius:3px;padding:1px 5px;font-size:.8em" class="${cfg.txtCls}">${cfg.symbol}</span>
+          ${cfg.label}
+        </span>`).join("")}
+        <span style="opacity:.7">（滑鼠移至儲存格可查看詳細說明）</span>
       </div>`;
     el.querySelectorAll("[data-corr-feat][data-corr-target]").forEach(cell => {
       cell.addEventListener("click", () => showScatter(cell.dataset.corrFeat, cell.dataset.corrTarget));
@@ -808,13 +1044,7 @@ const BehaviorCorrelationTab = (() => {
     const ci = _corrData?.correlation_insights;
     if (!ci) return;
 
-    const isUnfiltered = (
-      _filterSemester === "all" &&
-      _filterCluster  === "all" &&
-      _filterPass     === "all" &&
-      _filterEduType  === "all" &&
-      !_filterOutlier
-    );
+    const isUnfiltered = _isUnfiltered();
 
     const lines = [];
 
@@ -824,12 +1054,13 @@ const BehaviorCorrelationTab = (() => {
      */
     function _liveR(feat, target) {
       if (isUnfiltered) {
-        return _pearson(feat, target);
+        return _pearson(feat, target);   // 已是 number | null
       }
       const rows = Array.isArray(filteredRows) ? filteredRows : (_lastFiltered ?? _allScatterData ?? []);
-      return (_corrType === "spearman")
+      const result = (_corrType === "spearman")
         ? _spearmanValue(rows, feat, target)
         : _pearsonValue(rows, feat, target);
+      return result?.r ?? null;   // 解包診斷物件，統一回傳 number | null
     }
 
     const nSuffix = (!isUnfiltered && Array.isArray(filteredRows))
@@ -848,9 +1079,7 @@ const BehaviorCorrelationTab = (() => {
       }
     } else {
       // Phase D：篩選模式，優先讀 segment_pearson 預聚合的 highest_r
-      const segKey  = `${_filterSemester}|${_filterCluster}|${_filterPass}`;
-      const _canUseSegBadge = _filterEduType === "all" && !_filterOutlier;
-      const segData = _canUseSegBadge ? (_corrData?.segment_pearson?.[segKey] ?? null) : null;
+      const segData = _canUseSeg() ? (_corrData?.segment_pearson?.[_segKey()] ?? null) : null;
       if (segData?.highest_r?.feature) {
         const hr    = segData.highest_r;
         const rSign = hr.r >= 0 ? "+" : "";
@@ -865,7 +1094,7 @@ const BehaviorCorrelationTab = (() => {
         let bestFeat = null, bestTarget = null, bestR = null;
         for (const feat of _features()) {
           for (const target of _targets()) {
-            const r = _pearsonValue(rows, feat, target);
+            const r = _pearsonValue(rows, feat, target)?.r ?? null;
             if (r !== null && (bestR === null || Math.abs(r) > Math.abs(bestR))) {
               bestFeat = feat; bestTarget = target; bestR = r;
             }
@@ -935,7 +1164,6 @@ const BehaviorCorrelationTab = (() => {
 
   // ── 散佈圖選擇器 ─────────────────────────────────────────
 
-  // ── FIX BUG1/BUG2：接受 filteredRows 參數，不讀 _corrData.scatter_data ──
   function _renderScatterSelector(wrapperId, filteredRows) {
     const el = document.getElementById(wrapperId);
     if (!el || !_corrData) return;
@@ -999,10 +1227,8 @@ const BehaviorCorrelationTab = (() => {
              yAtMax: slope * xMax + intercept };
   }
 
-  // ── FIX BUG2：showScatter 加 rows 參數，傳給 _scatterRows ──
   function showScatter(feat, gradeCol, rows) {
     if (!_corrData) return;
-    _currentTarget = { feat, gradeCol };
 
     const raw    = _scatterRows(feat, gradeCol, rows);
     const r      = _pearson(feat, gradeCol);
@@ -1019,13 +1245,11 @@ const BehaviorCorrelationTab = (() => {
     const canvas = document.getElementById("scatterChart");
     if (!canvas) return;
 
-    const rho = _spearmanValue(
+    const rhoResult = _spearmanValue(
       raw.map(d => ({ features: { [feat]: d.x }, [gradeCol]: d.y })),
       feat, gradeCol
     );
-    const corrLabelInFooter = _corrType === "spearman"
-      ? (rho  != null ? `📊 Spearman ρ = ${rho  >= 0 ? "+" : ""}${rho.toFixed(3)}` : null)
-      : (r    != null ? `📈 Pearson  r = ${r    >= 0 ? "+" : ""}${r.toFixed(3)}`  : null);
+    const rho = rhoResult?.r ?? null;
 
     const reg = _calcRegression(points);
     const datasets = [{
@@ -1052,9 +1276,7 @@ const BehaviorCorrelationTab = (() => {
       });
     }
 
-    // REAL-2 修正：統一透過 ChartRegistry 管理，移除直接 destroy 以避免 zombie 拋出
     ChartRegistry.destroyById("scatterChart");
-    _scatterChart = null;
     _scatterChart = new Chart(canvas.getContext("2d"), {
       type: "scatter",
       data: { datasets },
@@ -1115,7 +1337,7 @@ const BehaviorCorrelationTab = (() => {
         },
       },
     });
-    ChartRegistry.register("scatterChart", _scatterChart);  // BUG-5：登記至 Registry
+    ChartRegistry.register("scatterChart", _scatterChart);
   }
 
   return { init, showScatter, onFilterChange, resetFilters, setCorrType };
