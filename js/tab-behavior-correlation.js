@@ -46,6 +46,12 @@
  *   BUG7  — stat.p?.toFixed(4)：stat.p != null 已守衛，?.toFixed 多餘且遮蔽意圖；改為 .toFixed。
  *   OPT6  — _canUseSegPearson / _canUseSegBadge 含 _filterEduType === "all" 永遠 true；
  *           提取為 _canUseSeg() helper，移除冗餘條件，兩處共用。
+ *
+ * FIXED (2025-05, v5):
+ *   BUG8  — _renderLaggedSection：篩選後所有指標 |r| < 0.1 時，rows.length === 0 觸發
+ *           `return`，tbody 保留全量舊內容，使用者看不出已連動。
+ *           修正：rows 為空時改為更新已存在的 tbody 顯示「無符合門檻」提示，
+ *           確保篩選後畫面確實清除舊的全量數值。
  */
 
 const BehaviorCorrelationTab = (() => {
@@ -615,7 +621,18 @@ const BehaviorCorrelationTab = (() => {
       })
       .sort(([, a], [, b]) => Math.abs(b.lag_delta ?? 0) - Math.abs(a.lag_delta ?? 0));
 
-    if (!rows.length) return;
+    // BUG8 FIX：rows 為空時不能靜默 return，必須清除 tbody 舊內容
+    if (!rows.length) {
+      const existing = document.getElementById("corrLaggedSection");
+      const tbody = existing?.querySelector("tbody");
+      if (tbody) {
+        const n = Array.isArray(filteredRows) ? filteredRows.length : "—";
+        tbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted small py-2">
+          此篩選條件下無 |r| ≥ 0.1 的指標（n=${n}）
+        </td></tr>`;
+      }
+      return;
+    }
 
     const _rCell = (stat) => {
       if (!stat || stat.r == null) return `<td class="text-center text-muted small">—</td>`;
