@@ -3557,6 +3557,8 @@ function getEnvAnnotations(sems) {
     return { xMin: startIdx - 0.5, xMax: endIdx + 0.5 };
   }
 
+  // annotation label.color 不支援 CSS var()，需在 render 時取得實際 hex 值
+  const labelColor = chartTextDimColor(); // 深色:#9aa0b8 / 淺色:#6b748f
   const annotations = {};
 
   const covidRange = boxRange('1082', '1112');
@@ -3566,14 +3568,14 @@ function getEnvAnnotations(sems) {
       drawTime: 'beforeDatasetsDraw',
       xMin: covidRange.xMin,
       xMax: covidRange.xMax,
-      backgroundColor: 'rgba(240,112,112,0.05)',
+      backgroundColor: 'rgba(240,112,112,0.12)',  // 加深：深色模式可見
       borderWidth: 0,
       label: {
         display: true,
         content: '疫情期間',
-        position: { x: 'center', y: 'start' },
-        yAdjust: 6,
-        color: 'var(--text-dim)',
+        position: { x: 'center', y: 'end' },      // 移至底部
+        yAdjust: -8,                                // 向上微移，避免被 X 軸截切
+        color: labelColor,                          // 實際 hex，支援深淺色
         font: { size: 9 },
         backgroundColor: 'transparent',
         padding: 2,
@@ -3588,14 +3590,14 @@ function getEnvAnnotations(sems) {
       drawTime: 'beforeDatasetsDraw',
       xMin: curriculumRange.xMin,
       xMax: curriculumRange.xMax,
-      backgroundColor: 'rgba(79,142,247,0.05)',
+      backgroundColor: 'rgba(79,142,247,0.10)',    // 加深：深色模式可見
       borderWidth: 0,
       label: {
         display: true,
         content: '108課綱',
-        position: { x: 'center', y: 'start' },
-        yAdjust: 20,
-        color: 'var(--text-dim)',
+        position: { x: 'center', y: 'end' },       // 移至底部
+        yAdjust: -8,                                 // 向上微移，避免被 X 軸截切
+        color: labelColor,                           // 實際 hex，支援深淺色
         font: { size: 9 },
         backgroundColor: 'transparent',
         padding: 2,
