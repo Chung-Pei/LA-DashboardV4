@@ -605,7 +605,6 @@ const BehaviorTimeTab = (() => {
       `<label style="display:flex;align-items:center;gap:3px;flex-shrink:0">👥 <select id="preExamClusterFilter" style="${selectStyle2}">${clusterOptions2}</select></label>` +
       `<label style="display:flex;align-items:center;gap:3px;flex-shrink:0">✅ <select id="preExamPassFilter" style="${selectStyle2}">${passOptions2}</select></label>` +
       `</div>`;
-    _bindFilterSelects(card);
     el.innerHTML =
       filterBadge +
       `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;margin-top:10px">${cardHtml}</div>` +
@@ -623,6 +622,10 @@ const BehaviorTimeTab = (() => {
       '<div style="margin-top:5px;font-size:.73rem;color:var(--text-dim,#999)">' +
         '外圈 = 期末考；內圈 = 期中考。若資料未含考試分段時數，以總閱讀時數與考前7天時數估算，重跑 ETL 可取得精準值。' +
       '</div>';
+    // [Fix] _bindFilterSelects 必須在 innerHTML 寫入後才呼叫，
+    // 確保 preExamSemFilter / preExamClusterFilter / preExamPassFilter
+    // 的 DOM 已存在，事件監聽器才能正確附加。
+    _bindFilterSelects(card);
   }
 
   function renderTimeSlotDonut(canvasId) {
