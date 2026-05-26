@@ -2861,6 +2861,22 @@ function renderCorrelation(filtered) {
     prog: c.program, sem: c.semester, cls: c.sheet_name
   }));
 
+  // ── 大環境變數：動態點形 / 顏色 ──
+  // Chart.js v4 scatter：pointStyle/backgroundColor/borderColor 均支援
+  // scriptable function (ctx => ...) 確保逐點正確讀取
+  const ptBgColors     = pts.map(p => PROGRAM_COLORS[p.prog] + '80'); // ~0.5 透明度
+  const ptBorderColors = pts.map(p => PROGRAM_COLORS[p.prog] + 'cc'); // ~0.8 透明度
+  const ptStyleFn = ctx => {
+    const raw = ctx.raw ?? ctx.dataset.data[ctx.dataIndex];
+    if (!raw?.sem) return 'circle';
+    switch (getSemPeriod(raw.sem)) {
+      case 'covid':      return 'rect';
+      case 'overlap':    return 'rectRot';
+      case 'curriculum': return 'triangle';
+      default:           return 'circle';
+    }
+  };
+
   const regData = DATA?.meta?.count_passrate_regression;  // schema 3.0: 巢狀結構
   const optData = DATA?.meta?.optimal_enrollment;         // schema 3.0: 各學制建議人數
 
@@ -2919,11 +2935,15 @@ function renderCorrelation(filtered) {
     data: {
       datasets: [
         {
-          label:           '班次',
-          data:            pts,
-          backgroundColor: pts.map(p => PROGRAM_COLORS[p.prog] + '88'),
-          pointRadius:     5,
-          pointHoverRadius:7,
+          label:            '班次',
+          data:             pts,
+          backgroundColor:  ptBgColors,
+          borderColor:      ptBorderColors,
+          borderWidth:      1.5,
+          pointStyle:       ptStyleFn,
+          pointRadius:      6,
+          pointHoverRadius: 8,
+          usePointStyle:    true,
         },
         ...rDatasetAll,
         ...rDatasetByProg,
@@ -2936,12 +2956,24 @@ function renderCorrelation(filtered) {
           position: 'bottom',
           labels:   { color: 'var(--text,#dde3f5)', font: { size: 11 } },
         },
+        subtitle: {
+          display: true,
+          text: '符號說明：● 常規 ｜ ■ 疫情 ｜ ◆ 重疊 ｜ ▲ 108課綱',
+          color: 'var(--text-dim)',
+          font: { size: 10 },
+          padding: { bottom: 6 },
+        },
         tooltip: { ...CHART_DEFAULTS.plugins.tooltip,
           callbacks: {
             label: ctx => {
               // 散佈點：顯示班級資訊
               if (ctx.dataset.type !== 'line') {
-                return `${ctx.raw.cls} ${semLabel(ctx.raw.sem)}  人數:${ctx.raw.x} 及格率:${ctx.raw.y}%`;
+                const period = getSemPeriod(ctx.raw.sem);
+                const tag = period === 'overlap'    ? ' [疫情/108課綱]'
+                          : period === 'covid'      ? ' [疫情期間]'
+                          : period === 'curriculum' ? ' [108課綱]'
+                          : '';
+                return `${ctx.raw.cls} ${semLabel(ctx.raw.sem)}${tag}  人數:${ctx.raw.x} 及格率:${ctx.raw.y}%`;
               }
               // 回歸線：顯示建議人數資訊（方案 2）
               const progKey = ctx.dataset._progKey;
@@ -3485,6 +3517,95 @@ function _updateMultiCount() {
     `已選 ${dSemSelected.size} / 5 個學期`;
 }
 
+// ══════════════════════════════════════════════════════════
+// 大環境變數 Helper（Panel D）
+// 疫情：'1082'–'1112'　108課綱：'1111'–'1142'
+// ══════════════════════════════════════════════════════════
+
+/**
+ * 判斷單一學期代碼屬於哪個大環境期間
+ * @param {string} sem  學期代碼，如 '1082'
+ * @returns {'normal'|'covid'|'curriculum'|'overlap'}
+ */
+function getSemPeriod(sem) {
+  const isCovid      = sem >= '1082' && sem <= '1112';
+  const isCurriculum = sem >= '1111' && sem <= '1142';
+  if (isCovid && isCurriculum) return 'overlap';
+  if (isCovid)                 return 'covid';
+  if (isCurriculum)            return 'curriculum';
+  return 'normal';
+}
+
+/**
+ * 根據當前 sems 陣列動態計算 annotation box 設定
+ * 若該區間完全不在 sems 內，對應 annotation 自動省略（回傳空物件）
+ * @param {string[]} sems  當前 X 軸學期代碼陣列（原始值，非 label）
+ * @returns {object}  chartjs-plugin-annotation annotations 物件
+ */
+function getEnvAnnotations(sems) {
+  // 學期代碼為純數字字串（如 '1082'），JS 詞典序 === 數值升序，字串比較安全
+  function boxRange(fromCode, toCode) {
+    // 全掃描：不假設 sems 嚴格升序（多選模式可為任意子集）
+    let startIdx = -1, endIdx = -1;
+    for (let i = 0; i < sems.length; i++) {
+      if (sems[i] >= fromCode && sems[i] <= toCode) {
+        if (startIdx === -1) startIdx = i;
+        endIdx = i;
+      }
+    }
+    if (startIdx === -1) return null;
+    return { xMin: startIdx - 0.5, xMax: endIdx + 0.5 };
+  }
+
+  const annotations = {};
+
+  const covidRange = boxRange('1082', '1112');
+  if (covidRange) {
+    annotations.covidBox = {
+      type: 'box',
+      drawTime: 'beforeDatasetsDraw',
+      xMin: covidRange.xMin,
+      xMax: covidRange.xMax,
+      backgroundColor: 'rgba(240,112,112,0.05)',
+      borderWidth: 0,
+      label: {
+        display: true,
+        content: '疫情期間',
+        position: { x: 'center', y: 'start' },
+        yAdjust: 6,
+        color: 'var(--text-dim)',
+        font: { size: 9 },
+        backgroundColor: 'transparent',
+        padding: 2,
+      }
+    };
+  }
+
+  const curriculumRange = boxRange('1111', '1142');
+  if (curriculumRange) {
+    annotations.curriculumBox = {
+      type: 'box',
+      drawTime: 'beforeDatasetsDraw',
+      xMin: curriculumRange.xMin,
+      xMax: curriculumRange.xMax,
+      backgroundColor: 'rgba(79,142,247,0.05)',
+      borderWidth: 0,
+      label: {
+        display: true,
+        content: '108課綱',
+        position: { x: 'center', y: 'start' },
+        yAdjust: 20,
+        color: 'var(--text-dim)',
+        font: { size: 9 },
+        backgroundColor: 'transparent',
+        padding: 2,
+      }
+    };
+  }
+
+  return annotations;
+}
+
 function renderD() {
   if (!DATA) return;
 
@@ -3634,6 +3755,7 @@ function renderDTrendMerge(filtered, sems, allClasses) {
       ...CHART_DEFAULTS,
       plugins: {
         ...CHART_DEFAULTS.plugins,
+        annotation: { annotations: getEnvAnnotations(sems) },
         tooltip: {
           ...CHART_DEFAULTS.plugins.tooltip,
           callbacks: {
@@ -3689,6 +3811,7 @@ function renderDTrendClass(filtered, sems, allClasses) {
       ...CHART_DEFAULTS,
       plugins: {
         ...CHART_DEFAULTS.plugins,
+        annotation: { annotations: getEnvAnnotations(sems) },
         legend: { labels: { color: 'var(--text-dim)', font: { size: 9 }, boxWidth: 12 } }
       },
       scales: {
@@ -3735,6 +3858,7 @@ function renderDProgramBar(allClasses, sems, filterProg) {
       ...CHART_DEFAULTS,
       plugins: {
         ...CHART_DEFAULTS.plugins,
+        annotation: { annotations: getEnvAnnotations(sems) },
         legend: { labels: { color: 'var(--text-dim)', font: { size: 9 }, boxWidth: 10 } },
         subtitle: { display: true, text: subtitle, color: 'var(--text-dim)', font: { size: 10 }, padding: { bottom: 4 } }
       },
@@ -3773,6 +3897,7 @@ function renderDPassRateLine(allClasses, sems, filterProg) {
       ...CHART_DEFAULTS,
       plugins: {
         ...CHART_DEFAULTS.plugins,
+        annotation: { annotations: getEnvAnnotations(sems) },
         legend: { labels: { color: 'var(--text-dim)', font: { size: 9 }, boxWidth: 10 } },
         tooltip: {
           ...CHART_DEFAULTS.plugins.tooltip,
@@ -3816,6 +3941,7 @@ function renderDPassRateBar(allClasses, sems, filterProg) {
       ...CHART_DEFAULTS,
       plugins: {
         ...CHART_DEFAULTS.plugins,
+        annotation: { annotations: getEnvAnnotations(sems) },
         legend: { labels: { color: 'var(--text-dim)', font: { size: 9 }, boxWidth: 10 } },
         tooltip: {
           ...CHART_DEFAULTS.plugins.tooltip,
