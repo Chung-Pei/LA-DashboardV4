@@ -522,7 +522,7 @@ const BehaviorCorrelationTab = (() => {
     grid.id = "corrCardGrid";
     grid.style.cssText = [
       "display:grid",
-      "grid-template-columns:repeat(auto-fit,minmax(340px,1fr))",
+      "grid-template-columns:1fr 1fr",
       "gap:16px",
       "margin-top:12px",
     ].join(";");
@@ -556,7 +556,7 @@ const BehaviorCorrelationTab = (() => {
     // ── 卡片 2：時間滯後相關性 ──
     const card2 = document.createElement("div");
     card2.className = "chart-card";
-    card2.style.cssText = CARD_CSS;
+    card2.style.cssText = CARD_CSS + ";grid-column:1/-1";
     card2.innerHTML = `
       <h6 style="margin:0;font-size:.88rem;font-weight:700;color:var(--text,#dde3f5);
                  display:flex;align-items:center;gap:6px">
@@ -570,7 +570,7 @@ const BehaviorCorrelationTab = (() => {
     // ── 卡片 3：散佈圖（全寬）──
     const card3 = document.createElement("div");
     card3.className = "chart-card";
-    card3.style.cssText = CARD_CSS + ";grid-column:1/-1";
+    card3.style.cssText = CARD_CSS;
     card3.innerHTML = `
       <h6 style="margin:0;font-size:.88rem;font-weight:700;color:var(--text,#dde3f5)">
         🔍 散佈圖（點擊熱力圖儲存格切換）
@@ -578,8 +578,8 @@ const BehaviorCorrelationTab = (() => {
       <div id="${scatterWrapperId}_inner"></div>`;
 
     grid.appendChild(card1);
-    grid.appendChild(card2);
     grid.appendChild(card3);
+    grid.appendChild(card2);
 
     // 將原始元素替換為卡片網格
     // 原始 heatmapEl / scatterEl 保留在 DOM（移至 _inner），以維持 id 查找相容性
@@ -621,7 +621,12 @@ const BehaviorCorrelationTab = (() => {
     if (!anchor) return;
 
     const lagged = _corrData?.lagged_pearson;
-    if (!lagged?.results || !Object.keys(lagged.results).length) return;
+    if (!lagged?.results || !Object.keys(lagged.results).length) {
+      const slot = document.getElementById(`${afterId}_lagged`);
+      if (slot) slot.innerHTML = `<p style="font-size:.8rem;color:var(--text-dim,#888);margin:8px 0 0">
+        尚無時間滯後資料（ETL 未產出 lagged_pearson），請重跑 ETL 後重整頁面。</p>`;
+      return;
+    }
 
     const { front_target, back_target, results } = lagged;
     const frontLabel = GRADE_LABELS[front_target] || front_target;
@@ -656,7 +661,12 @@ const BehaviorCorrelationTab = (() => {
       })
       .sort(([, a], [, b]) => Math.abs(b.lag_delta ?? 0) - Math.abs(a.lag_delta ?? 0));
 
-    if (!rows.length) return;
+    if (!rows.length) {
+      const slot = document.getElementById(`${afterId}_lagged`);
+      if (slot) slot.innerHTML = `<p style="font-size:.8rem;color:var(--text-dim,#888);margin:8px 0 0">
+        目前篩選條件下無 |r| ≥ 0.1 的顯著指標。</p>`;
+      return;
+    }
 
     const _rCell = (stat) => {
       if (!stat || stat.r == null) return `<td class="text-center text-muted small">—</td>`;
