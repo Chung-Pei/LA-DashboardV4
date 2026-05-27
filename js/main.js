@@ -984,7 +984,7 @@ function mergeClassSummary(target, source) {
 }
 
 function normalizeData() {
-  // SEC-BUG-1 FIX: validate required top-level keys before accessing
+  // 驗證必要頂層欄位
   const REQUIRED = ['class_summary', 'students', 'meta'];
   const missing = REQUIRED.filter(k => !DATA || typeof DATA[k] !== 'object' || DATA[k] === null);
   if (missing.length) {
@@ -1040,7 +1040,7 @@ async function loadData() {
 function init() {
   const m = DATA.meta;
   document.getElementById('metaInfo').innerHTML =
-    `${escapeHtml(String(m.semesters.length))} 學期 · 更新 ${escapeHtml(m.generated_at.slice(0,10))}`;
+    `${escapeHtml(String(m.semesters.length))} 學期 · 更新 ${escapeHtml((m.generated_at ?? '').slice(0,10))}`;
 
   const sems = m.semesters;
   if (sems.length > 0) {
@@ -1218,13 +1218,15 @@ let _aFilterSnapshot = null;
 function onAFilterChange(changedField) {
   const sem       = document.getElementById('aFilterSem').value;
   const program   = document.getElementById('aFilterProgram').value;
-  const courseType= document.getElementById('aFilterType').value;
-
-  _aFilterSnapshot = { sem, program, courseType,
-    sheet: document.getElementById('aFilterSheet').value };
 
   _applyProgramDisabledState(sem);
   _applyTypeLockedState(program);
+
+  // Re-read courseType AFTER _applyTypeLockedState, which may have locked the DOM value to 'theory'
+  const courseType = document.getElementById('aFilterType').value;
+
+  _aFilterSnapshot = { sem, program, courseType,
+    sheet: document.getElementById('aFilterSheet').value };
 
   const resetFields = _rebuildSheetOptions(sem, program, courseType, changedField);
 
@@ -1234,7 +1236,6 @@ function onAFilterChange(changedField) {
     _hideAResetHint();
   }
 
-  const newSheet = document.getElementById('aFilterSheet').value;
   const emptyCheck = typeof FilterEngine !== 'undefined'
     ? FilterEngine.checkEmptyResult(sem, program, courseType, DATA)
     : { empty: false };
@@ -1341,13 +1342,16 @@ function _hideAResetHint() {
 function undoAFilterReset() {
   if (!_aFilterSnapshot) return;
   const { sem, program, courseType, sheet } = _aFilterSnapshot;
-  document.getElementById('aFilterSem').value    = sem;
-  document.getElementById('aFilterProgram').value = program;
-  document.getElementById('aFilterType').value    = courseType;
-  _rebuildSheetOptions(sem, program, courseType, 'class');
-  document.getElementById('aFilterSheet').value   = sheet;
+  document.getElementById('aFilterSem').value     = sem;
+  document.getElementById('aFilterProgram').value  = program;
+  document.getElementById('aFilterType').value     = courseType;
+  // Apply lock/disabled BEFORE rebuilding sheet options so the DOM value is authoritative
   _applyProgramDisabledState(sem);
   _applyTypeLockedState(program);
+  // Re-read after lock in case program forced type to 'theory'
+  const lockedType = document.getElementById('aFilterType').value;
+  _rebuildSheetOptions(sem, program, lockedType, 'class');
+  document.getElementById('aFilterSheet').value    = sheet;
   _hideAResetHint();
   _hideAEmptyHint();
   renderA();
@@ -1630,9 +1634,37 @@ function switchCView(view) {
   renderCView();
 }
 
+function _applyCProgramDisabledState(sem) {
+  const sel = document.getElementById('cFilterProgram');
+  if (!sel || !DATA) return;
+  const suffix = sem && sem !== 'all' ? String(sem).slice(-1) : null;
+  // 上半學期(1)：4yr 不開課；下半學期(2)：二技/學士後護不開課
+  const disabledMap = { '1': ['4yr'], '2': ['2yr_gen','2yr_work','2yr_night','post'] };
+  const disabled = suffix ? (disabledMap[suffix] || []) : [];
+  const TOOLTIPS = {
+    '4yr':       '四技一般僅於下半學期開課',
+    '2yr_gen':   '二技僅於上半學期開課',
+    '2yr_work':  '二技在職僅於上半學期開課',
+    '2yr_night': '二技夜間僅於上半學期開課',
+    'post':      '學士後護僅於上半學期開課',
+  };
+  Array.from(sel.options).forEach(opt => {
+    if (opt.value === 'all') return;
+    opt.disabled     = disabled.includes(opt.value);
+    opt.style.color  = disabled.includes(opt.value) ? 'var(--text-dim)' : '';
+    opt.title        = disabled.includes(opt.value) ? (TOOLTIPS[opt.value] || '') : '';
+  });
+  if (disabled.includes(sel.value)) sel.value = 'all';
+}
+
 function onCGeneralFilterChange(changedField) {
   const sem     = document.getElementById('cFilterSem').value;
   const program = document.getElementById('cFilterProgram').value;
+
+  // 學期切換時，同步禁用與該學期不相容的學制選項
+  if (changedField === 'semester') {
+    _applyCProgramDisabledState(sem);
+  }
 
   const noLab = ['2yr_gen','2yr_work','2yr_night','retake_class'];
   const lockHint = document.getElementById('cTypeLockHint');
@@ -1646,7 +1678,7 @@ function onCGeneralFilterChange(changedField) {
       else { btn.disabled = false; btn.style.opacity = ''; }
     });
     if (lockHint) {
-      lockHint.textContent = `此學制不開設實驗課，課程類型已鎖定為正課`;
+      lockHint.textContent = '此學制不開設實驗課，課程類型已鎖定為正課';
       lockHint.style.display = 'block';
     }
   } else {
@@ -1657,11 +1689,20 @@ function onCGeneralFilterChange(changedField) {
     if (lockHint) lockHint.style.display = 'none';
   }
 
+  // 學制切換後同步重修生開關狀態（重修生學制須鎖定為包含）
+  _syncRetakerBtn('C');
+
   _hideCEmptyHint();
   renderCView();
 }
 
 function setCType(type) {
+  // Guard: programs without lab courses cannot switch to practicum
+  if (type === 'practicum') {
+    const prog = document.getElementById('cFilterProgram')?.value || 'all';
+    const noLab = ['2yr_gen','2yr_work','2yr_night','retake_class'];
+    if (noLab.includes(prog)) return;
+  }
   cCurrentType = type;
   ['cTypeAll','cTypeTheory','cTypePrac'].forEach(id => {
     const map = { cTypeAll:'all', cTypeTheory:'theory', cTypePrac:'practicum' };
@@ -1711,6 +1752,8 @@ function _resetCGeneralFilters() {
   if (semEl) semEl.value = 'all';
   const progEl = document.getElementById('cFilterProgram');
   if (progEl) progEl.value = 'all';
+  // 重置後清除所有學制的 disabled 狀態（全部學期時無限制）
+  _applyCProgramDisabledState('all');
   cCurrentType = 'all';
   cCurrentPass = 'all';
   ['cTypeAll','cTypeTheory','cTypePrac'].forEach((id,i) =>
@@ -1722,11 +1765,13 @@ function _resetCGeneralFilters() {
     document.getElementById(id)?.classList.remove('active'));
   document.getElementById('cExamSem')?.classList.add('active');
   document.getElementById('cExamSemR')?.classList.add('active');
+  // 同步重修生開關
+  _syncRetakerBtn('C');
   const searchEl = document.getElementById('cSearch');
   if (searchEl) searchEl.value = '';
   const searchBox = document.getElementById('searchResults');
   if (searchBox) { searchBox.classList.remove('open'); searchBox.innerHTML = ''; }
-  // BUG-5 FIX: 清除學生成績輪廓區塊與搜尋提示
+  // 清除學生成績輪廓區塊與搜尋提示
   const profileWrap = document.getElementById('profileWrap');
   if (profileWrap) { profileWrap.innerHTML = ''; profileWrap.style.marginBottom = ''; }
   const searchHint = document.getElementById('cSearchHint');
@@ -1813,6 +1858,19 @@ function _hideCEmptyHint() {
 function renderCView() {
   if (!DATA) return;
   if (cCurrentView === 'general') {
+    const recs = getCFilteredRecords();
+    if (!recs.length) {
+      const progVal = document.getElementById('cFilterProgram')?.value || 'all';
+      const semVal  = document.getElementById('cFilterSem')?.value     || 'all';
+      const progLabel = progVal !== 'all' ? (PROGRAM_LABELS[progVal] || progVal) : '';
+      const semStr    = semVal  !== 'all' ? `學期 ${semLabel(semVal)}` : '';
+      const hint = [progLabel, semStr].filter(Boolean).join('、') || '目前篩選條件';
+      _showCEmptyHint(`${hint} 無符合資料`);
+      document.getElementById('cStats').innerHTML = '';
+      updateFilterSummary('C');
+      return;
+    }
+    _hideCEmptyHint();
     renderCAnomalyAndDist();
     renderCStats();
   } else {
@@ -1825,12 +1883,20 @@ function renderCView() {
   updateFilterSummary('C');
 }
 
+let _cPanelInited = false;
+
 function initCPanel() {
   if (!DATA) return;
-  populateCYearFilter();
-  populateCFilterSem();
-  setBType('theory');
-  _resetCGeneralFilters();
+  if (!_cPanelInited) {
+    // First entry only: populate dropdowns and set initial defaults
+    populateCYearFilter();
+    populateCFilterSem();
+    _applyCProgramDisabledState('all');
+    _syncRetakerBtn('C');
+    setBType('theory');
+    _resetCGeneralFilters();
+    _cPanelInited = true;
+  }
   renderCView();
   const pw = document.getElementById('profileWrap');
   if (pw && !pw.querySelector('[data-student-profile]')) pw.innerHTML = '';
@@ -2287,8 +2353,8 @@ function renderProfile(sid) {
   const theory    = sorted.filter(r => r.type === 'theory');
   const practicum = sorted.filter(r => r.type === 'practicum');
 
-  // BUG-3 FIX: x 軸以「學期+班別」為唯一鍵，theory 與 practicum 共用同一時間軸，
-  // 避免同學期同班出現重複 label（theory 一條、practicum 一條均映射到同一 x 位置）。
+  // x 軸以「學期+班別」為唯一鍵，theory 與 practicum 共用同一時間軸，
+  // 避免同學期同班出現重複 label。
   const labelKey = r => semLabel(r.semester) + ' ' + r.sheet_name;
   const allLabels = [...new Map(sorted.map(r => [labelKey(r), labelKey(r)])).values()];
 
@@ -2312,8 +2378,7 @@ function renderProfile(sid) {
     });
   }
 
-  // BUG-4 FIX: 單點時在 labels 前後各補一個空字串 label，
-  // 使 category scale 將資料點置中（layout.padding 對 category scale 無效）。
+  // 單點時在 labels 前後各補一個空字串 label，使 category scale 將資料點置中
   const displayLabels = allLabels.length === 1
     ? ['', allLabels[0], '']
     : allLabels;
@@ -2892,10 +2957,9 @@ function renderCorrelation(filtered) {
     ? (regAll?.available === true)
     : (_corrShowAllReg && regAll?.available === true);
 
-  // WARN-2 fix: intercept 加 toFixed(2) 避免浮點顯示雜訊
   const rDatasetAll = hasRegAll ? [{
     label: `全體回歸線  r=${regAll.r}  y=${regAll.slope}x${+regAll.intercept >= 0 ? '+' : ''}${(+regAll.intercept).toFixed(2)}`,
-    data:        regAll?.line ?? [],   // WARN-1 fix: 防禦 undefined line
+    data:        regAll?.line ?? [],
     type:        'line',
     borderColor: 'rgba(247,164,79,0.85)',
     borderWidth: 2,
@@ -3004,8 +3068,7 @@ function renderCorrelation(filtered) {
     },
   });
 
-  // BUG-1 fix: 按鈕插入在 mkChart 之後，鎖定 .chart-wrap 規避 prepareScrollableChart 的 canvas 重包行為
-  // 每次強制重建，避免 addEventListener 殘留舊閉包
+  // 按鈕插入在 mkChart 之後，鎖定 .chart-wrap；每次強制重建，避免事件監聽殘留舊閉包
   document.getElementById('corrToggleAllRegBtn')?.remove();
   if (!isAllProg && regAll?.available === true) {
     const canvas = document.getElementById('chartCorrelation');
@@ -3041,7 +3104,7 @@ function _renderEnrollmentSummary(programs, optData) {
   const el = document.getElementById('enrollmentSummary');
   if (!el || !optData) return;
 
-  // 顯示順序：全體合併優先，其餘依 PROGRAM_ORDER（WARN-2 修正）
+  // 顯示順序：全體合併優先，其餘依 PROGRAM_ORDER
   const keys = ['all', ...programs].filter((k, i, arr) => arr.indexOf(k) === i);
 
   const reasonText = {
@@ -3051,7 +3114,7 @@ function _renderEnrollmentSummary(programs, optData) {
     linear:            '回歸退化為線性，無最大值',
   };
 
-  // WARN-2 修正：依 PROGRAM_ORDER 排序，確保表格顯示順序一致
+  // 依 PROGRAM_ORDER 排序，確保表格顯示順序一致
   const SUMMARY_ORDER = ['all', ...PROGRAM_ORDER];
   const sortedKeys = SUMMARY_ORDER.filter(k => keys.includes(k));
   // 補上 PROGRAM_ORDER 未涵蓋的 key（如未來新學制）
@@ -3060,7 +3123,6 @@ function _renderEnrollmentSummary(programs, optData) {
   const rows = sortedKeys.map(key => {
     const opt = optData[key];
     if (!opt) return '';
-    // BUG-1 修正：label 套 escapeHtml 防禦
     const label = escapeHtml(opt.label ?? key);
     const color = key === 'all'
       ? 'rgba(247,164,79,0.9)'
@@ -3081,7 +3143,6 @@ function _renderEnrollmentSummary(programs, optData) {
         <td style="text-align:center">${inRange}</td>
       </tr>`;
     } else {
-      // BUG-2 修正：reason fallback 套 escapeHtml
       const reason = reasonText[opt.reason] ?? escapeHtml(opt.reason ?? '–');
       return `<tr style="opacity:0.55">
         <td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:6px"></span>${label}</td>
@@ -3964,7 +4025,6 @@ function renderDPassRateBar(allClasses, sems, filterProg) {
   });
 }
 
-
 function renderDTable(filtered) {
   const tbody = document.getElementById('dDetailBody');
   if (!tbody) return;
@@ -4009,6 +4069,7 @@ if ('serviceWorker' in navigator) {
       }
 
     } catch (err) {
+      console.warn('[SW] 註冊失敗：', err);
     }
   });
 
@@ -4071,7 +4132,7 @@ function showIOSInstallBanner() {
   title.textContent = '安裝到主畫面';
 
   const desc = document.createElement('span');
-  desc.textContent = '點擊底部「分享』按鈕，選擇「加入主畫面」';
+  desc.textContent = '點擊底部「分享」按鈕，選擇「加入主畫面」';
 
   textWrap.append(title, desc);
 
@@ -4469,8 +4530,7 @@ function buildPrintHTML(items) {
 }
 
 /**
- * doPrint — Phase 2 重構版（Blob URL，無需子視窗 inline script）
- * 詳見規格書 Phase 2
+ * doPrint — 使用 Blob URL 開新視窗列印（不需 inline script）
  */
 function doPrint() {
   const items = getSelectedPrintItems();
@@ -4536,7 +4596,7 @@ function doPrintPreview() {
 }
 
 // ══════════════════════════════════════════════════════════
-// data-action 事件委派系統（Phase 3）
+// data-action 事件委派系統
 // 取代靜態 HTML 中所有 onclick 屬性
 // ══════════════════════════════════════════════════════════
 function initDataActionDelegation() {
@@ -4662,7 +4722,7 @@ function bindStaticHandlers() {
     renderVarianceBar(byId('aFilterSem').value, byId('aFilterSheet').value));
   byId('cFilterSem')      ?.addEventListener('change', () => onCGeneralFilterChange('semester'));
   byId('cFilterProgram')  ?.addEventListener('change', () => onCGeneralFilterChange('program'));
-  byId('dFilterProgram')  ?.addEventListener('change', () => renderD());
+  byId('dFilterProgram')  ?.addEventListener('change', () => { _syncRetakerBtn('D'); renderD(); });
   byId('printYearStart')  ?.addEventListener('change', () => syncPrintYearRange());
   byId('printYearEnd')    ?.addEventListener('change', () => syncPrintYearRange());
 

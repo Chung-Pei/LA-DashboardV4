@@ -152,7 +152,7 @@ const BehaviorTimeTab = (() => {
         BehaviorLoader.load.time(),
       ]);
       _allSemesters = _availableSemesters();
-      // BUG-1 修正：明確兩步驟賦值，避免 _filterRows 拋出時 _rowCache.filtered 保持 null 的競態
+      // 明確兩步驟賦值，避免 _filterRows 拋出時 _rowCache.filtered 保持 null 的競態
       const allRows = _studentRows(false);
       const filteredRows = _filterRows(allRows);
       _rowCache = { all: allRows, filtered: filteredRows };
@@ -219,7 +219,7 @@ const BehaviorTimeTab = (() => {
   }
 
   function onFilterChange(sourceId) {
-    // [Fix Q2] 以觸發來源的 id 判斷變更的是哪個維度，取其值更新全域狀態，
+    // 以觸發來源的 id 判斷變更的是哪個維度，取其值更新全域狀態，
     // 再同步所有其他同維度的 select，確保頂部列與圖表內三組篩選器永遠一致。
     if (sourceId) {
       const el = document.getElementById(sourceId);
@@ -254,10 +254,8 @@ const BehaviorTimeTab = (() => {
   function _studentRows(applyFilters = true) {
     const timeStudents = _timeData?.students || [];
     const rows = timeStudents.map(s => {
-      // [Fix v2.1] time_distribution.json 的 student 物件為扁平結構（07_export_json.py），
-      // 所有 time_profile 欄位直接輸出於 s 頂層，不存在 s.time_profile 包層。
-      // 原本 `const tp = s.time_profile || {}` 導致 tp 永遠為 {}，
-      // 所有時段分布、考試距離、週節律欄位皆讀取失敗（靜默回傳 0/{} ）。
+      // time_distribution.json v2.1 的 student 物件為扁平結構（07_export_json.py），
+      // 所有 time_profile 欄位直接輸出於 s 頂層（不存在 s.time_profile 包層）。
       const tp = s;
       return {
         anon_id:             s.anon_id,
@@ -276,11 +274,8 @@ const BehaviorTimeTab = (() => {
         finalPeriod:         _num(tp.final_period_minutes),
         activeWeeks:         _num(tp.active_weeks),
         timeSlotDistribution: tp.time_slot_distribution || {},
-        // v2.1 新欄位（已正確從 s 頂層讀取，維持不變）
         heatmapRaw:          s.heatmap_matrix?.raw        || {},
-        heatmapNorm:         s.heatmap_matrix?.normalized || {},
-        hourlyRaw:           s.hourly_distribution?.raw        || [],
-        hourlyNorm:          s.hourly_distribution?.normalized || [],
+        hourlyRaw:           s.hourly_distribution?.raw   || [],
         late_night_ratio:    _num(tp.late_night_ratio),
       };
     });
@@ -320,12 +315,11 @@ const BehaviorTimeTab = (() => {
 
   function _renderAll() {
 
-    // [Fix Q1] 每次篩選變更時強制從 all rows 重新計算 filtered，
-    // 確保 AI 洞察等所有元件都使用最新篩選結果。
+    // 每次篩選變更時強制從 all rows 重新計算 filtered
     if (_rowCache) {
       _rowCache.filtered = _filterRows(_rowCache.all);
     } else {
-      _getRowCache();   // fallback：透過 _getRowCache() 完整重建並快取
+      _getRowCache();
     }
     const rows    = _filteredStudentRows();
     const countEl = document.getElementById("timeFilterCount");
@@ -337,8 +331,6 @@ const BehaviorTimeTab = (() => {
     renderTimeSlotDonut("timeSlotChart");
 
     // ── 新增圖表（rAF 避免篩選切換時卡頓）──
-    // [Fix Q1] renderAIInsightBadge 移入 rAF，確保與其他圖表同一幀執行，
-    // 避免在 _rowCache.filtered 尚未寫入前就讀取（理論上同步但保守處理）
     requestAnimationFrame(() => {
       renderAIInsightBadge("aiInsightBadge");
       renderStudyHeatmap("studyHeatmapWrap");
@@ -418,7 +410,7 @@ const BehaviorTimeTab = (() => {
     const semAvg         = validAttempts.reduce((a, b) => a + b, 0) / (validAttempts.length || 1);
     const maxStudents    = Math.max(...activeStudents.filter(v => v != null), 1);
 
-    ChartRegistry.destroyById(canvasId);  // BUG-2：整合 ChartRegistry
+    ChartRegistry.destroyById(canvasId);
     _charts.weeklyQuiz = new Chart(canvas.getContext("2d"), {
       type: "line",
       plugins: [examLinePlugin],
@@ -471,7 +463,7 @@ const BehaviorTimeTab = (() => {
         },
       },
     });
-    ChartRegistry.register(canvasId, _charts.weeklyQuiz);  // BUG-T1：登記至 Registry
+    ChartRegistry.register(canvasId, _charts.weeklyQuiz);
   }
 
   function _periodValues(row, exam) {
@@ -500,10 +492,6 @@ const BehaviorTimeTab = (() => {
     if (segStats) {
       // 完整 key 命中
       if (segStats[segKey]?.[p15Field] != null) return segStats[segKey][p15Field];
-      // 單維 fallback：只篩了一個維度時嘗試對應單維 key
-      const [sem, cluster, pass] = segKey.split("|");
-      if (sem !== "all" && cluster === "all" && pass === "all" && segStats[segKey]?.[p15Field] != null)
-        return segStats[segKey][p15Field];
       // 全量 fallback
       if (segStats["all|all|all"]?.[p15Field] != null) return segStats["all|all|all"][p15Field];
     }
@@ -519,14 +507,13 @@ const BehaviorTimeTab = (() => {
     const canvas = document.getElementById(canvasId);
     if (!canvas || !_timeData) return;
     const rows = _filteredStudentRows();
-    const exams = [{ key: "midterm", label: "期中考" }, { key: "final", label: "期末考" }];
     const p15Mid   = _calcP15("midterm");
     const p15Final = _calcP15("final");
     const midCounts   = PREP_TYPES.map(t => rows.filter(r => _prepType(r, "midterm", p15Mid)   === t.key).length);
     const finalCounts = PREP_TYPES.map(t => rows.filter(r => _prepType(r, "final",   p15Final)  === t.key).length);
     const allCounts   = [...midCounts, ...finalCounts];
     _renderPreExamSummary(canvas, rows, allCounts, p15Mid, p15Final);
-    ChartRegistry.destroyById(canvasId);  // BUG-2：整合 ChartRegistry
+    ChartRegistry.destroyById(canvasId);
     _charts.preExam = new Chart(canvas.getContext("2d"), {
       type: "doughnut",
       data: {
@@ -553,7 +540,7 @@ const BehaviorTimeTab = (() => {
         },
       },
     });
-    ChartRegistry.register(canvasId, _charts.preExam);  // BUG-T1：登記至 Registry
+    ChartRegistry.register(canvasId, _charts.preExam);
   }
 
   function _renderPreExamSummary(canvas, rows, counts, p15Mid, p15Final) {
@@ -579,10 +566,7 @@ const BehaviorTimeTab = (() => {
         <div style="font-size:.72rem;color:var(--text-dim,#888);line-height:1.2">${label}</div>
         <div style="font-weight:700;color:var(--text-mid,#4f5f78);margin-top:3px">${value}</div>
       </div>`).join("");
-    const semLabel     = _filterSemester === "all" ? "全部年度" : _formatSemLabel(_filterSemester);
-    const clusterLabel = _filterCluster  === "all" ? "全部分群" : `${_filterCluster} ${CLUSTER_NAMES[_filterCluster] || _filterCluster}`;
-    const passLabel    = _filterPass     === "all" ? "全部"     : (_filterPass === "pass" ? "及格" : "不及格");
-    // [Fix Q2] 改為可互動的 <select>，與全域篩選雙向同步
+    const selectStyle2 = `font-size:.76rem;padding:2px 4px;border-radius:6px;border:1px solid var(--border,#2a2f45);background:var(--surface2,#1c2030);color:var(--text-mid,#9aa0b8);cursor:pointer;max-width:105px`;
     const semOptions2     = [
       `<option value="all"${_filterSemester === "all" ? " selected" : ""}>全部年度</option>`,
       ..._allSemesters.map(s => `<option value="${s}"${_normalizeSem(s) === _normalizeSem(_filterSemester) ? " selected" : ""}>${_formatSemLabel(s)}</option>`),
@@ -596,7 +580,6 @@ const BehaviorTimeTab = (() => {
       `<option value="pass"${_filterPass === "pass" ? " selected" : ""}>及格</option>`,
       `<option value="fail"${_filterPass === "fail" ? " selected" : ""}>不及格</option>`,
     ].join("");
-    const selectStyle2 = `font-size:.76rem;padding:2px 4px;border-radius:6px;border:1px solid var(--border,#2a2f45);background:var(--surface2,#1c2030);color:var(--text-mid,#9aa0b8);cursor:pointer;max-width:105px`;
     const filterBadge  =
       `<div style="display:flex;flex-wrap:nowrap;overflow-x:auto;align-items:center;box-sizing:border-box;max-width:100%;margin-bottom:8px;padding:5px 10px;border-radius:6px;background:var(--card-bg2,#1c2030);` +
       `border:1px solid rgba(110,130,165,.2);font-size:.75rem;color:var(--text-mid,#4f5f78);line-height:1.6;gap:6px;white-space:nowrap">` +
@@ -622,9 +605,7 @@ const BehaviorTimeTab = (() => {
       '<div style="margin-top:5px;font-size:.73rem;color:var(--text-dim,#999)">' +
         '外圈 = 期末考；內圈 = 期中考。若資料未含考試分段時數，以總閱讀時數與考前7天時數估算，重跑 ETL 可取得精準值。' +
       '</div>';
-    // [Fix] _bindFilterSelects 必須在 innerHTML 寫入後才呼叫，
-    // 確保 preExamSemFilter / preExamClusterFilter / preExamPassFilter
-    // 的 DOM 已存在，事件監聽器才能正確附加。
+    // 必須在 innerHTML 寫入後才呼叫，確保 DOM 已存在再附加事件監聽
     _bindFilterSelects(card);
   }
 
@@ -643,7 +624,7 @@ const BehaviorTimeTab = (() => {
         badgeEl.className = "time-slot-filter-badge";
         canvas.parentElement.insertBefore(badgeEl, canvas);
       }
-      // [Fix Q2] 改為可互動的 <select>，與全域篩選雙向同步
+      // 與全域篩選雙向同步的 <select> 篩選列
       const semOptions     = [
         `<option value="all"${_filterSemester === "all" ? " selected" : ""}>全部年度</option>`,
         ..._allSemesters.map(s => `<option value="${s}"${_normalizeSem(s) === _normalizeSem(_filterSemester) ? " selected" : ""}>${_formatSemLabel(s)}</option>`),
@@ -668,7 +649,7 @@ const BehaviorTimeTab = (() => {
         `</div>`;
       _bindFilterSelects(card);
     }
-    ChartRegistry.destroyById(canvasId);  // BUG-2：整合 ChartRegistry
+    ChartRegistry.destroyById(canvasId);
     _charts.timeSlot = new Chart(canvas.getContext("2d"), {
       type: "doughnut",
       data: {
@@ -693,7 +674,7 @@ const BehaviorTimeTab = (() => {
         },
       },
     });
-    ChartRegistry.register(canvasId, _charts.timeSlot);  // BUG-T1：登記至 Registry
+    ChartRegistry.register(canvasId, _charts.timeSlot);
   }
 
   // ────────────────────────────────────────────────────────────
@@ -723,7 +704,7 @@ const BehaviorTimeTab = (() => {
       avgLateNight = segData.late_night_ratio_mean ?? 0;
       avgScore     = segData.avg_score ?? null;
     } else {
-      // fallback：即時計算（原有邏輯）
+      // fallback：即時計算
       avgLateNight = _avg(rows.map(r => r.late_night_ratio));
       const scoredRows  = rows.filter(r => r.final_score != null || r.semester_score != null);
       const scoreValues = scoredRows.map(r => _num(r.final_score ?? r.semester_score));
@@ -796,7 +777,7 @@ const BehaviorTimeTab = (() => {
       if (segData?.heatmap_raw) {
         heatmapData = segData.heatmap_raw;
       } else {
-        // fallback：從 students[] 加總（原有邏輯）
+        // fallback：從 students[] 加總
         const rows = _filteredStudentRows();
         rows.forEach(r => {
           Object.entries(r.heatmapRaw || {}).forEach(([key, val]) => {
@@ -816,7 +797,6 @@ const BehaviorTimeTab = (() => {
     const lgH = 20; // 圖例區高度（內嵌於 SVG）
     const svgW = labelW + 24 * cellW;
     const svgH = labelH + 7 * cellH + lgH;
-
 
     // 建構 SVG
 
@@ -875,7 +855,6 @@ const BehaviorTimeTab = (() => {
         ${svgParts.join("")}
       </div>`;
 
-
     if (!wrap.dataset.heatmapBound) {
       wrap.dataset.heatmapBound = "1";
       wrap.addEventListener("mouseover", e => {
@@ -900,8 +879,6 @@ const BehaviorTimeTab = (() => {
    * 篩選器有效時：從 students[] 即時加總；無篩選時使用 ETL 預聚合
    */
 
-  const _noExamLinesPlugin = { id: "examVerticalLines", afterDraw() {} };
-
   function renderHourlyLine(canvasId) {
     const canvas = document.getElementById(canvasId);
     if (!canvas || !_timeData) return;
@@ -922,7 +899,7 @@ const BehaviorTimeTab = (() => {
         const total = raw.reduce((a, b) => a + b, 0);
         classNorm = total > 0 ? raw.map(v => v / total) : Array(24).fill(0);
       } else {
-        // fallback：從 students[] 即時加總（原有邏輯）
+        // fallback：從 students[] 即時加總
         const rows = _filteredStudentRows();
         const acc  = Array(24).fill(0);
         rows.forEach(r => (r.hourlyRaw || []).forEach((v, h) => { acc[h] += v; }));
@@ -972,10 +949,9 @@ const BehaviorTimeTab = (() => {
       }
     }
 
-    ChartRegistry.destroyById(canvasId);  // BUG-2：整合 ChartRegistry
+    ChartRegistry.destroyById(canvasId);
     _charts.hourlyLine = new Chart(canvas.getContext("2d"), {
       type: "line",
-      plugins: [_noExamLinesPlugin],
       data: { labels: HOUR_LABELS, datasets },
       options: {
         responsive: true, maintainAspectRatio: false,
@@ -998,14 +974,14 @@ const BehaviorTimeTab = (() => {
           legend: { position: "bottom", labels: { font: { size: 11 }, boxWidth: 22, boxHeight: 8, padding: 12 } },
           tooltip: {
             callbacks: {
-              title: ctx => ctx.length ? `${ctx[0].label}` : "",
+              title: ctx => ctx.length ? ctx[0].label : "",
               label: ctx => ` ${ctx.dataset.label}：${(ctx.raw * 100).toFixed(2)}%`,
             },
           },
         },
       },
     });
-    ChartRegistry.register(canvasId, _charts.hourlyLine);  // BUG-T1：登記至 Registry
+    ChartRegistry.register(canvasId, _charts.hourlyLine);
   }
 
   // ── 公開 API ─────────────────────────────────────────────────
