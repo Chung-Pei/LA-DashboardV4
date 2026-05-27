@@ -706,10 +706,27 @@ const BehaviorCorrelationTab = (() => {
       </tr>`).join("");
 
     // 若外框已存在，僅更新 tbody，避免整個 DOM 重建造成 Layout Reflow
+    const laggedSlot = document.getElementById(`${afterId}_lagged`);
+    const mountLaggedSection = (sectionEl) => {
+      if (laggedSlot) {
+        if (sectionEl.parentNode !== laggedSlot) {
+          laggedSlot.innerHTML = "";
+          laggedSlot.appendChild(sectionEl);
+        }
+      } else if (!sectionEl.isConnected) {
+        sectionEl.style.marginTop = "20px";
+        anchor.parentNode.insertBefore(sectionEl, anchor.nextSibling);
+      }
+    };
+
     const existing = document.getElementById("corrLaggedSection");
     if (existing) {
       const tbody = existing.querySelector("tbody");
-      if (tbody) { tbody.innerHTML = tableRows; return; }
+      if (tbody) {
+        tbody.innerHTML = tableRows;
+        mountLaggedSection(existing);
+        return;
+      }
       existing.remove();
     }
 
@@ -886,14 +903,7 @@ const BehaviorCorrelationTab = (() => {
       </div>`;
 
     // 優先插入卡片內的 slot；fallback 到原始錨點後（相容舊 HTML 結構）
-    const laggedSlot = document.getElementById(`${afterId}_lagged`);
-    if (laggedSlot) {
-      laggedSlot.innerHTML = "";
-      laggedSlot.appendChild(section);
-    } else {
-      section.style.marginTop = "20px";
-      anchor.parentNode.insertBefore(section, anchor.nextSibling);
-    }
+    mountLaggedSection(section);
 
     const modal    = section.querySelector("#laggedHelpModal");
     const btnOpen  = section.querySelector("#btnLaggedHelp");
