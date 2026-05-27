@@ -1,8 +1,58 @@
 /**
- * tab-behavior-correlation.js  — v5
- * 相關性分析 Tab：Pearson/Spearman 熱力圖 + 時間滯後相關性 + 散佈圖
- * 版面：三張卡片（與 tab-behavior-time.js 格式一致）
+ * tab-behavior-correlation.js
+ * 相關性分析 Tab — Pearson 熱力圖 + 散佈圖
  * 依賴：Chart.js (scatter)、behavior-loader.js
+ *
+ * FIXED (2025-05):
+ *   BUG1 — _applyFiltersAndRender 覆蓋 _corrData.scatter_data，
+ *           導致篩選基底被污染；改以 _lastFiltered 傳遞給下游，不再動 _corrData。
+ *   BUG2 — _scatterRows 直接讀 _corrData.scatter_data 而非篩選後資料；
+ *           改為接受 rows 參數，fallback 順序：rows → _lastFiltered → _allScatterData。
+ *   BUG3 — setCorrType 只呼叫 _renderHeatmap，未同步更新散佈圖；
+ *           改呼叫 _applyFiltersAndRender 確保全部元件連動。
+ *   BUG4 — _renderHeatmap 永遠讀 _corrData.pearson（ETL 全量預算值），
+ *           篩選後熱力圖 r 值不更新；改為接受 filteredRows 參數，
+ *           有篩選時以 _pearsonValue/_spearmanValue 即時重算，
+ *           全量（all）時仍優先用 ETL 值避免不必要運算。
+ *           篩選後 p-value 無法可靠估算，改顯示 n=筆數。
+ *
+ * FIXED (2025-05, v2):
+ *   BUG5 — _pearsonValue / _spearmanValue 改回傳 {r, reason, n?} 診斷物件後，
+ *           _liveR、showScatter 中的 rho、insights badge 中的 bestR 仍以舊格式
+ *           純數字處理，導致 .toFixed()、Math.abs()、>= 0 等比較對物件運算失效；
+ *           分別在 _liveR 回傳前解包、rhoResult?.r、_pearsonValue(...)?.r 修正。
+ *   OPT1 — isUnfiltered 邏輯重複定義 3 次；提取為模組級 _isUnfiltered() helper。
+ *
+ * FIXED (2025-05, v3 — systematic-debugging):
+ *   DEAD1 — corrLabelInFooter：計算後從未使用，移除。
+ *   DEAD2 — _currentTarget：寫入後從未讀取，移除。
+ *   DEAD3 — _allEduTypes：UI 已移除，收集後從未讀取，移除。
+ *   DEAD4 — _scatterChart = null 後立即重賦值，多餘賦值移除。
+ *   DEAD5 — 7 處行內 FIX BUGx 注解已整合入 header，清除。
+ *   BUG6  — result?.r ?? result 舊格式相容分支：_getR 已統一回傳
+ *           {r,...} 物件，純數字 fallback 永遠不會觸發且遮蔽型別錯誤；移除。
+ *   OPT3  — segKey 字串在 _renderHeatmap / _renderInsightsBadge 重複計算；
+ *           提取為 _segKey() helper。
+ *   OPT4  — 重複分區注解 '取得篩選後資料' + '篩選快取' 合併為一。
+ *   OPT5  — 熱力圖圖例 HTML 硬編碼，與 REASON_CONFIG 資料重複；
+ *           改從 REASON_CONFIG 動態產生，維護單一來源。
+ *
+ * FIXED (2025-05, v4 — systematic-debugging):
+ *   DEAD6 — _renderHeatmap 上方 BUG4 comment block（5行）已整合入 header，清除。
+ *   DEAD7 — '// ── Modal 開關事件' 分區注解多餘，清除。
+ *   DEAD8 — _filterEduType filter branch 在 _filteredScatterData 內：
+ *           onFilterChange/resetFilters 皆硬設為 "all" 且無 UI，
+ *           此 if 分支永遠不執行，移除。
+ *   BUG7  — stat.p?.toFixed(4)：stat.p != null 已守衛，?.toFixed 多餘且遮蔽意圖；改為 .toFixed。
+ *   OPT6  — _canUseSegPearson / _canUseSegBadge 含 _filterEduType === "all" 永遠 true；
+ *           提取為 _canUseSeg() helper，移除冗餘條件，兩處共用。
+ *
+ * FIXED (2025-05, v5):
+ *   BUG8  — _renderLaggedSection 顯示門檻 |r| >= 0.1 過高，導致多數學期篩選後
+ *           rows.length === 0，tbody 靜默保留全量舊值，使用者看不出已連動。
+ *           實測：學期 1112/1122 在門檻 0.1 下通過指標數為 0。
+ *           修正：門檻降為 0.05，同步更新 footer 說明文字。
+ *           同時修正 rows 為空時改顯示「無符合門檻」提示取代 return，確保舊內容被清除。
  */
 
 const BehaviorCorrelationTab = (() => {
@@ -74,13 +124,17 @@ const BehaviorCorrelationTab = (() => {
   };
 
   let _corrData     = null;
+  let _scatterChart = null;
 
   // ── 篩選狀態 ─────────────────────────────────────────────
   let _allScatterData   = null;   // 全量 scatter_data（篩選的基底）
+  let _behaviorByMasked = null;   // masked_id → behavior student
+  let _behaviorByAnon   = null;   // anon_id → behavior student
   let _allSemesters     = [];     // 可用學期列表
   let _filterSemester   = "all";
   let _filterCluster    = "all";
   let _filterPass       = "all";
+  let _filterEduType    = "all";
   let _filterOutlier    = false;
   let _corrType         = "pearson";
 
@@ -90,6 +144,7 @@ const BehaviorCorrelationTab = (() => {
       _filterSemester === "all" &&
       _filterCluster  === "all" &&
       _filterPass     === "all" &&
+      _filterEduType  === "all" &&
       !_filterOutlier
     );
   }
@@ -278,8 +333,8 @@ const BehaviorCorrelationTab = (() => {
 
       // 建立 masked_id → behavior student 索引（取得 cluster）
       const bStudents = behaviorData?.students || [];
-      const _behaviorByMasked = new Map(bStudents.map(s => [s.masked_id, s]));
-      const _behaviorByAnon   = new Map(bStudents.map(s => [s.anon_id, s]));
+      _behaviorByMasked = new Map(bStudents.map(s => [s.masked_id, s]));
+      _behaviorByAnon = new Map(bStudents.map(s => [s.anon_id, s]));
 
       // 備份全量並 join cluster 欄位
       const raw = _corrData?.scatter_data || [];
@@ -303,6 +358,7 @@ const BehaviorCorrelationTab = (() => {
       _filterSemester = "all";
       _filterCluster  = "all";
       _filterPass     = "all";
+      _filterEduType  = "all";
       _filterOutlier  = false;
 
       _renderFilterBar(heatmapId);
@@ -438,6 +494,7 @@ const BehaviorCorrelationTab = (() => {
     _filterSemester = document.getElementById("corrSemFilter")?.value     || "all";
     _filterCluster  = document.getElementById("corrClusterFilter")?.value  || "all";
     _filterPass     = document.getElementById("corrPassFilter")?.value     || "all";
+    _filterEduType  = "all";  // 修課類型 UI 已移除（規格書 §四），內部邏輯保留備用
     _filterOutlier  = document.getElementById("corrOutlierToggle")?.checked ?? false;
     _lastFilterKey  = null;
     _applyFiltersAndRender("corrHeatmap", "scatterSection");
@@ -447,6 +504,7 @@ const BehaviorCorrelationTab = (() => {
     _filterSemester = "all";
     _filterCluster  = "all";
     _filterPass     = "all";
+    _filterEduType  = "all";
     _filterOutlier  = false;
     _lastFilterKey  = null;
     // Sync selects back to "all"
@@ -466,7 +524,7 @@ const BehaviorCorrelationTab = (() => {
   let _lastFiltered   = null;
 
   function _filteredScatterData() {
-    const key = `${_filterSemester}|${_filterCluster}|${_filterPass}|${_filterOutlier}`;
+    const key = `${_filterSemester}|${_filterCluster}|${_filterPass}|${_filterEduType}|${_filterOutlier}`;
     if (key === _lastFilterKey && _lastFiltered !== null) return _lastFiltered;
 
     const raw = _allScatterData;
@@ -502,99 +560,7 @@ const BehaviorCorrelationTab = (() => {
     return _lastFiltered;
   }
 
-  // ── 卡片佈局初始化（與時間分析頁一致）──────────────────────
-  // 在 corrHeatmap 與 scatterSection 的父容器中，依照
-  // tab-behavior-time.js 的 .chart-card 格狀排版，
-  // 建立「Pearson 相關係數」與「時間滯後相關性」兩張獨立卡片。
-
-  function _ensureCardLayout(heatmapId, scatterWrapperId) {
-    const heatmapEl  = document.getElementById(heatmapId);
-    const scatterEl  = document.getElementById(scatterWrapperId);
-    if (!heatmapEl || !scatterEl) return;
-
-    // 若卡片網格已存在，不重建（避免閃爍）
-    if (document.getElementById("corrCardGrid")) return;
-
-    const parent = heatmapEl.parentNode;
-
-    // 建立網格容器（與 time tab 相同的 chart-grid 樣式）
-    const grid = document.createElement("div");
-    grid.id = "corrCardGrid";
-    grid.style.cssText = [
-      "display:grid",
-      "grid-template-columns:1fr 1fr",
-      "gap:16px",
-      "margin-top:12px",
-    ].join(";");
-
-    // ── 卡片 1：Pearson / Spearman 相關係數熱力圖 ──
-    const CARD_CSS = [
-      "background:var(--card-bg,#1a1f35)",
-      "border:1px solid var(--border,#2a2f45)",
-      "border-radius:12px",
-      "padding:16px",
-      "display:flex",
-      "flex-direction:column",
-      "gap:10px",
-      "min-width:0",
-    ].join(";");
-
-    const card1 = document.createElement("div");
-    card1.className = "chart-card";
-    card1.style.cssText = CARD_CSS;
-    card1.innerHTML = `
-      <h6 style="margin:0;font-size:.88rem;font-weight:700;color:var(--text,#dde3f5);
-                 display:flex;align-items:center;gap:6px">
-        📊 Pearson 相關係數分析
-        <span style="font-size:.73rem;font-weight:400;color:var(--text-dim,#888)">
-          學習行為指標 × 成績相關性熱力圖
-        </span>
-      </h6>
-      <div id="corrInsightsBadgeSlot"></div>
-      <div id="${heatmapId}_inner"></div>`;
-
-    // ── 卡片 2：時間滯後相關性 ──
-    const card2 = document.createElement("div");
-    card2.className = "chart-card";
-    card2.style.cssText = CARD_CSS + ";grid-column:1/-1";
-    card2.innerHTML = `
-      <h6 style="margin:0;font-size:.88rem;font-weight:700;color:var(--text,#dde3f5);
-                 display:flex;align-items:center;gap:6px">
-        ⏱ 時間滯後相關性
-        <span style="font-size:.73rem;font-weight:400;color:var(--text-dim,#888)">
-          行為指標預測力的時間性偏移分析
-        </span>
-      </h6>
-      <div id="${scatterWrapperId}_lagged"></div>`;
-
-    // ── 卡片 3：散佈圖（全寬）──
-    const card3 = document.createElement("div");
-    card3.className = "chart-card";
-    card3.style.cssText = CARD_CSS;
-    card3.innerHTML = `
-      <h6 style="margin:0;font-size:.88rem;font-weight:700;color:var(--text,#dde3f5)">
-        🔍 散佈圖（點擊熱力圖儲存格切換）
-      </h6>
-      <div id="${scatterWrapperId}_inner"></div>`;
-
-    grid.appendChild(card1);
-    grid.appendChild(card3);
-    grid.appendChild(card2);
-
-    // 將原始元素替換為卡片網格
-    // 原始 heatmapEl / scatterEl 保留在 DOM（移至 _inner），以維持 id 查找相容性
-    parent.insertBefore(grid, heatmapEl);
-
-    // 把原始 el 搬入對應 _inner（不刪除，保持 id 存在）
-    const inner1 = document.getElementById(`${heatmapId}_inner`);
-    const inner3 = document.getElementById(`${scatterWrapperId}_inner`);
-    if (inner1) inner1.appendChild(heatmapEl);
-    if (inner3) inner3.appendChild(scatterEl);
-  }
-
   function _applyFiltersAndRender(heatmapId, scatterWrapperId) {
-    _ensureCardLayout(heatmapId, scatterWrapperId);
-
     const filtered = _filteredScatterData();
     const count = Array.isArray(filtered) ? filtered.length : "—";
 
@@ -604,7 +570,7 @@ const BehaviorCorrelationTab = (() => {
     _renderInsightsBadge(heatmapId, filtered);
     _renderHeatmap(heatmapId, filtered);
     _renderScatterSelector(scatterWrapperId, filtered);
-    _renderLaggedSection(scatterWrapperId, filtered, !document.getElementById("corrCardGrid"));
+    _renderLaggedSection(scatterWrapperId, filtered);
   }
 
   /**
@@ -616,66 +582,31 @@ const BehaviorCorrelationTab = (() => {
    * @param {string} afterId        - DOM 容器 id
    * @param {Array|null} filteredRows - 篩選後資料列；null 表示全量模式
    */
-  function _renderLaggedSection(afterId, filteredRows, showTitle = true) {
+  function _renderLaggedSection(afterId, filteredRows) {
     const anchor = document.getElementById(afterId);
     if (!anchor) return;
 
-    const lagged = _corrData?.lagged_pearson || null;
-    const hasLaggedResults = !!(lagged?.results && Object.keys(lagged.results).length);
-    const targets = _targets();
-    const front_target = lagged?.front_target
-      || targets.find(t => /midterm|grade_midterm/i.test(t))
-      || targets[0];
-    const back_target = lagged?.back_target
-      || targets.find(t => /final|grade_final/i.test(t))
-      || targets.find(t => t !== front_target)
-      || targets[1];
+    const lagged = _corrData?.lagged_pearson;
+    if (!lagged?.results || !Object.keys(lagged.results).length) return;
 
-    if (!front_target || !back_target || front_target === back_target) {
-      const slot = document.getElementById(`${afterId}_lagged`);
-      if (slot) slot.innerHTML = `<p style="font-size:.8rem;color:var(--text-dim,#888);margin:8px 0 0">
-        無法建立時間滯後相關性：目前資料缺少可比較的前段/後段成績欄位。</p>`;
-      return;
-    }
-
-    const results = hasLaggedResults
-      ? lagged.results
-      : Object.fromEntries(_features().map(feat => [feat, null]));
+    const { front_target, back_target, results } = lagged;
     const frontLabel = GRADE_LABELS[front_target] || front_target;
     const backLabel  = GRADE_LABELS[back_target]  || back_target;
 
     // 判斷是否為全量模式（篩選器皆為 all）
     const isUnfiltered = _isUnfiltered();
 
-    const allRows = Array.isArray(filteredRows)
+    // 篩選模式下即時重算 r 值，取代 ETL 靜態值
+    const activeRows = (!isUnfiltered && Array.isArray(filteredRows) && filteredRows.length > 0)
       ? filteredRows
-      : (Array.isArray(_lastFiltered)
-          ? _lastFiltered
-          : (Array.isArray(_allScatterData) ? _allScatterData : (_corrData?.scatter_data || [])));
-
-    // 篩選模式、Spearman、或 ETL 未產出 lagged_pearson 時即時重算 r 值
-    const shouldRecompute = !hasLaggedResults || !isUnfiltered || _corrType === "spearman";
-    const activeRows = (shouldRecompute && Array.isArray(allRows) && allRows.length > 0)
-      ? allRows
       : null;
-
-    if (shouldRecompute && !activeRows) {
-      const slot = document.getElementById(`${afterId}_lagged`);
-      if (slot) slot.innerHTML = `<p style="font-size:.8rem;color:var(--text-dim,#888);margin:8px 0 0">
-        無法建立時間滯後相關性：目前資料缺少 scatter_data 明細。</p>`;
-      return;
-    }
 
     // 重建 rows：篩選模式下動態計算 front r / back r / lag_delta
     const rows = Object.entries(results)
       .map(([feat, v]) => {
-        if (!activeRows) return [feat, v];  // 全量且 ETL 有 lagged_pearson：直接用 ETL 值
-        const frResult = (_corrType === "spearman")
-          ? _spearmanValue(activeRows, feat, front_target)
-          : _pearsonValue(activeRows, feat, front_target);
-        const brResult = (_corrType === "spearman")
-          ? _spearmanValue(activeRows, feat, back_target)
-          : _pearsonValue(activeRows, feat, back_target);
+        if (!activeRows) return [feat, v];  // 全量：直接用 ETL 值
+        const frResult = _pearsonValue(activeRows, feat, front_target);
+        const brResult = _pearsonValue(activeRows, feat, back_target);
         const fr = frResult?.r ?? null;
         const br = brResult?.r ?? null;
         const lagDelta = (fr != null && br != null) ? +(br - fr).toFixed(4) : null;
@@ -687,14 +618,18 @@ const BehaviorCorrelationTab = (() => {
       })
       .filter(([, v]) => {
         const fr = v.front?.r, br = v.back?.r;
-        return fr != null || br != null;
+        return (fr != null && Math.abs(fr) >= 0.05) || (br != null && Math.abs(br) >= 0.05);
       })
       .sort(([, a], [, b]) => Math.abs(b.lag_delta ?? 0) - Math.abs(a.lag_delta ?? 0));
 
+    // BUG8 FIX：rows 為空時不能靜默 return，必須清除 tbody 舊內容
     if (!rows.length) {
-      const slot = document.getElementById(`${afterId}_lagged`);
-      if (slot) slot.innerHTML = `<p style="font-size:.8rem;color:var(--text-dim,#888);margin:8px 0 0">
-        目前篩選條件下無法計算時間滯後相關性，可能是樣本數不足或指標/成績欄位沒有變異。</p>`;
+      const existing = document.getElementById("corrLaggedSection");
+      const tbody = existing?.querySelector("tbody");
+      if (tbody) {
+        const n = Array.isArray(filteredRows) ? filteredRows.length : "—";
+        tbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted small py-2">此篩選條件下無 |r| ≥ 0.05 的指標（n=${n}）</td></tr>`;
+      }
       return;
     }
 
@@ -736,45 +671,28 @@ const BehaviorCorrelationTab = (() => {
       </tr>`).join("");
 
     // 若外框已存在，僅更新 tbody，避免整個 DOM 重建造成 Layout Reflow
-    const laggedSlot = document.getElementById(`${afterId}_lagged`);
-    const mountLaggedSection = (sectionEl) => {
-      if (laggedSlot) {
-        if (sectionEl.parentNode !== laggedSlot) {
-          laggedSlot.innerHTML = "";
-          laggedSlot.appendChild(sectionEl);
-        }
-      } else if (!sectionEl.isConnected) {
-        sectionEl.style.marginTop = "20px";
-        anchor.parentNode.insertBefore(sectionEl, anchor.nextSibling);
-      }
-    };
-
     const existing = document.getElementById("corrLaggedSection");
     if (existing) {
       const tbody = existing.querySelector("tbody");
-      if (tbody) {
-        tbody.innerHTML = tableRows;
-        mountLaggedSection(existing);
-        return;
-      }
+      if (tbody) { tbody.innerHTML = tableRows; return; }
       existing.remove();
     }
 
     const section = document.createElement("div");
     section.id = "corrLaggedSection";
-
+    section.style.cssText = "margin-top:20px";
     section.innerHTML = `
-      ${showTitle ? `<h6 class="fw-semibold mb-1" style="font-size:.88rem;display:flex;align-items:center;gap:8px">
+      <h6 class="fw-semibold mb-1" style="font-size:.88rem;display:flex;align-items:center;gap:8px">
         ⏱ 時間滯後相關性
         <span style="font-size:.75rem;font-weight:400;color:var(--text-dim,#888)">
           行為指標 vs 前段（${frontLabel}）/ 後段（${backLabel}）
-        </span>` : `<div style="display:flex;justify-content:flex-end">`}
+        </span>
         <button id="btnLaggedHelp"
-          style="width:18px;height:18px;border-radius:50%;border:1px solid var(--accent,#3498db);
+          style="margin-left:4px;width:18px;height:18px;border-radius:50%;border:1px solid var(--accent,#3498db);
                  background:transparent;color:var(--accent,#3498db);font-size:.7rem;font-weight:700;
                  cursor:pointer;line-height:1;padding:0;flex-shrink:0"
           title="說明此分析圖">?</button>
-      ${showTitle ? `</h6>` : `</div>`}
+      </h6>
 
       <!-- 說明 Modal -->
       <div id="laggedHelpModal" style="display:none;position:fixed;inset:0;z-index:9999;
@@ -810,7 +728,7 @@ const BehaviorCorrelationTab = (() => {
               Δ = r（${backLabel}）− r（${frontLabel}）
             </div>
             <p style="margin:8px 0 0;color:var(--text-dim,#9aa0b8);font-size:.82rem">
-              僅顯示至少一欄 |r| ≥ 0.1 的指標，並依 |Δ| 由大到小排序，讓差異最顯著的行為優先呈現。
+              僅顯示至少一欄 |r| ≥ 0.05 的指標，並依 |Δ| 由大到小排序，讓差異最顯著的行為優先呈現。
             </p>
           </div>
 
@@ -929,11 +847,10 @@ const BehaviorCorrelationTab = (() => {
           <span style="color:var(--text-mid,#9aa0b8);font-weight:600">— 無法計算</span>
           樣本不足（&lt; 5 筆）或所有人數值相同（σ = 0），Δ 無法得出。
         </div>
-        <div style="margin-top:2px;opacity:.7">色彩同熱力圖（藍正紅負）。全量模式標 * 者 p &lt; 0.05。</div>
+        <div style="margin-top:2px;opacity:.7">色彩同熱力圖（藍正紅負）。全量模式標 * 者 p &lt; 0.05。僅顯示 |r| ≥ 0.05 的指標。</div>
       </div>`;
 
-    // 優先插入卡片內的 slot；fallback 到原始錨點後（相容舊 HTML 結構）
-    mountLaggedSection(section);
+    anchor.parentNode.insertBefore(section, anchor.nextSibling);
 
     const modal    = section.querySelector("#laggedHelpModal");
     const btnOpen  = section.querySelector("#btnLaggedHelp");
@@ -1258,14 +1175,7 @@ const BehaviorCorrelationTab = (() => {
     ].join(";");
     badge.innerHTML = lines.map(l => `<span>${l}</span>`).join("");
 
-    // 優先插入卡片內的 slot；fallback 到原始錨點前（相容舊 HTML 結構）
-    const slotEl = document.getElementById("corrInsightsBadgeSlot");
-    if (slotEl) {
-      slotEl.innerHTML = "";
-      slotEl.appendChild(badge);
-    } else {
-      anchor.parentNode.insertBefore(badge, anchor);
-    }
+    anchor.parentNode.insertBefore(badge, anchor);
   }
 
   // ── 散佈圖選擇器 ─────────────────────────────────────────
@@ -1286,14 +1196,12 @@ const BehaviorCorrelationTab = (() => {
         : (_filterSemester !== "all")
           ? `年度 ${_filterSemester} 尚無獨立散佈圖資料（ETL 尚未產出 by_semester）`
           : "散佈圖資料尚未產出，請執行 ETL";
-      const noDataTarget = document.getElementById(`${wrapperId}_inner`) || el;
-      noDataTarget.innerHTML = `<div style="padding:14px;background:rgba(230,126,34,.08);border:1px solid rgba(230,126,34,.3);border-radius:8px;font-size:.82rem;color:var(--accent3,#a04000)">⚠️ ${noDataReason}</div>`;
+      el.innerHTML = `<div style="padding:14px;background:rgba(230,126,34,.08);border:1px solid rgba(230,126,34,.3);border-radius:8px;font-size:.82rem;color:var(--accent3,#a04000)">⚠️ ${noDataReason}</div>`;
       return;
     }
 
-    // 優先寫入卡片 slot；fallback 到原始容器（相容舊 HTML 結構）
-    const targetEl = document.getElementById(`${wrapperId}_inner`) || el;
-    targetEl.innerHTML = `
+    el.innerHTML = `
+      <h6 class="mt-4 mb-2 fw-semibold">散佈圖</h6>
       <div id="scatterChartWrap" style="position:relative;height:320px;width:100%">
         <canvas id="scatterChart"></canvas>
       </div>`;
@@ -1385,7 +1293,7 @@ const BehaviorCorrelationTab = (() => {
     }
 
     ChartRegistry.destroyById("scatterChart");
-    const scatterChart = new Chart(canvas.getContext("2d"), {
+    _scatterChart = new Chart(canvas.getContext("2d"), {
       type: "scatter",
       data: { datasets },
       options: {
@@ -1445,7 +1353,7 @@ const BehaviorCorrelationTab = (() => {
         },
       },
     });
-    ChartRegistry.register("scatterChart", scatterChart);
+    ChartRegistry.register("scatterChart", _scatterChart);
   }
 
   return { init, showScatter, onFilterChange, resetFilters, setCorrType };
