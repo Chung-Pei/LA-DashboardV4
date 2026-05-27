@@ -1,4 +1,4 @@
-/**
+﻿/**
  * tab-behavior-correlation.js
  * 相關性分析 Tab — Pearson 熱力圖 + 散佈圖
  * 依賴：Chart.js (scatter)、behavior-loader.js
@@ -614,13 +614,6 @@ const BehaviorCorrelationTab = (() => {
     card3.className = "chart-card";
     card3.style.cssText = `${cardCss};grid-column:1/-1`;
     card3.innerHTML = `
-      <h6 style="margin:0;font-size:.92rem;font-weight:700;color:var(--text,#172033);
-                 display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-        ⏱ 時間滯後相關性
-        <span style="font-size:.75rem;font-weight:400;color:var(--text-dim,#667085)">
-          行為指標預測力的時間性偏移分析
-        </span>
-      </h6>
       <div id="${scatterWrapperId}_lagged"></div>`;
 
     grid.appendChild(card1);
@@ -825,12 +818,12 @@ const BehaviorCorrelationTab = (() => {
 
     const section = document.createElement("div");
     section.id = "corrLaggedSection";
-    section.style.cssText = "margin-top:20px";
+    section.style.cssText = slot ? "" : "margin-top:20px";
     section.innerHTML = `
       <h6 class="fw-semibold mb-1" style="font-size:.88rem;display:flex;align-items:center;gap:8px">
         ⏱ 時間滯後相關性
         <span style="font-size:.75rem;font-weight:400;color:var(--text-dim,#888)">
-          行為指標 vs 前段（${frontLabel}）/ 後段（${backLabel}）
+          行為指標預測力的時間性偏移分析：前段（${frontLabel}）/ 後段（${backLabel}）
         </span>
         <button id="btnLaggedHelp"
           style="margin-left:4px;width:18px;height:18px;border-radius:50%;border:1px solid var(--accent,#3498db);
