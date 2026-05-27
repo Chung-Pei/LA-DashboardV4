@@ -687,14 +687,14 @@ const BehaviorCorrelationTab = (() => {
       })
       .filter(([, v]) => {
         const fr = v.front?.r, br = v.back?.r;
-        return (fr != null && Math.abs(fr) >= 0.1) || (br != null && Math.abs(br) >= 0.1);
+        return fr != null || br != null;
       })
       .sort(([, a], [, b]) => Math.abs(b.lag_delta ?? 0) - Math.abs(a.lag_delta ?? 0));
 
     if (!rows.length) {
       const slot = document.getElementById(`${afterId}_lagged`);
       if (slot) slot.innerHTML = `<p style="font-size:.8rem;color:var(--text-dim,#888);margin:8px 0 0">
-        目前篩選條件下無 |r| ≥ 0.1 的顯著指標。</p>`;
+        目前篩選條件下無法計算時間滯後相關性，可能是樣本數不足或指標/成績欄位沒有變異。</p>`;
       return;
     }
 
