@@ -2696,7 +2696,7 @@ function renderDeltaByProgram(retakers) {
   const progDeltas = {};
   retakers.forEach(item => {
     item.recs.filter(r => r.delta != null).forEach(r => {
-      const p = classInfo(r.sheet_name, r.semester).program;
+      const p = classifyProgram(r.sheet_name, r.semester);
       if (!progDeltas[p]) progDeltas[p] = [];
       progDeltas[p].push(r.delta);
     });
@@ -3241,8 +3241,41 @@ function switchTab(tab) {
 // ══════════════════════════════════════════════════════════
 // 深/淺色模式切換
 // ══════════════════════════════════════════════════════════
+function updateSubjectDisplay() {
+  const subj = document.getElementById('subjectInput')?.textContent?.trim();
+  const badge = document.getElementById('yearRangeBadge');
+  if (badge && subj) {
+    badge.title = '科目：' + subj;
+  }
 }
 
+async function autoFillSubjectFromBehavior() {
+  const input = document.getElementById('subjectInput');
+  if (!input) return;
+
+  let courseName = null;
+
+  if (!courseName && window.BEHAVIOR_SUMMARY?.course_name) {
+    courseName = window.BEHAVIOR_SUMMARY.course_name;
+  }
+  if (!courseName && typeof BehaviorRadarTab !== 'undefined' && BehaviorRadarTab._meta?.course_name) {
+    courseName = BehaviorRadarTab._meta.course_name;
+  }
+  if (!courseName) {
+    try {
+      const r = await fetch('data/behavior.json', { cache: 'no-cache' });
+      if (r.ok) {
+        const j = await r.json();
+        courseName = j.meta?.course_name ?? j.course_name ?? j.courseName ?? null;
+      }
+    } catch (_) { }
+  }
+
+  if (courseName) {
+    input.textContent = courseName;
+    updateSubjectDisplay();
+  }
+}
 
 function toggleMetaInfo() {
   const header = document.querySelector('header');
@@ -3286,6 +3319,12 @@ function toggleTheme() {
   refreshChartDefaults();
 })();
 
+// ══════════════════════════════════════════════════════════
+// 學制分類器
+// ══════════════════════════════════════════════════════════
+function classifyProgram(sheetName, semester) {
+  return classInfo(sheetName, semester).program;
+}
 
 // ══════════════════════════════════════════════════════════
 // PANEL D — 跨屆比較
@@ -3682,7 +3721,7 @@ function renderD() {
   const semsSet = new Set(sems);
   const allClasses = Object.values(DATA.class_summary).map(c => ({
     ...c,
-    program: classInfo(c.sheet_name, c.semester).program
+    program: classifyProgram(c.sheet_name, c.semester)
   })).filter(c => {
     if (!semsSet.has(c.semester)) return false;
     if (!getIncludeRetaker('D') &&
