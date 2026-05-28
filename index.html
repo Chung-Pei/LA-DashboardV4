@@ -1247,7 +1247,6 @@ body.light .behavior-range-badge {
 .filter-bar.collapsed { display: none !important; }
 </style>
 <!-- 核心篩選邏輯模組 -->
-<script defer src="js/filter-engine.js"></script>
 <!--
   Clickjacking 防護（GitHub Pages 替代方案）：
   GitHub Pages 不支援自訂 HTTP headers，無法設定 frame-ancestors/X-Frame-Options。
@@ -2379,6 +2378,8 @@ body.light .behavior-range-badge {
   </div>
 </div>
 
+<!-- 核心篩選邏輯模組（Bug E fix: moved from <head> to guarantee defer order） -->
+<script defer src="js/filter-engine.js"></script>
 <!-- 主應用邏輯（依賴 filter-engine.js 與 CDN Chart.js） -->
 <script defer src="js/main.js"></script>
 
